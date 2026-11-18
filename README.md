@@ -16,8 +16,13 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 The screen always shows the actual database path. A new database is initialized
-automatically; existing, unknown or incompatible databases are rejected without
-an automatic upgrade. Tkinter must be available in the Python installation.
+automatically. Version 0.1 databases prompt for a backed-up upgrade to add the
+Dropdown table; declining leaves the database unchanged. Close all other copies
+of the application before accepting. A verified `PreUpgrade_*` database is kept
+beside the original. Existing inventory, history, IDs, selections and sort order
+are preserved, and existing fabric descriptions seed the new lists. Failed
+upgrades roll back. Unknown or incompatible databases are rejected.
+Tkinter must be available in the Python installation.
 
 Each record represents **one physical usable rectangle**, not a quantity of
 interchangeable pieces. Enter its Fabric Name, Color, Pattern Name, Usable Width,
@@ -30,7 +35,7 @@ silently rotated. Unknown directions remain explicitly unknown.
 This milestone uses **inches**. Measurements accept whole numbers, decimals
 through six places, and proper fractions in halves through sixty-fourths,
 including mixed values such as `42 1/2`. Dimensions must be positive and no
-larger than 100,000 inches. SQLite stores integer millionths of an inch, avoiding
+larger than 10,800 inches (a full bolt). SQLite stores integer millionths of an inch, avoiding
 binary floating-point rounding; fractions and decimals round-trip exactly.
 Metric entry/conversion is not yet implemented.
 
@@ -38,9 +43,17 @@ Metric entry/conversion is not yet implemented.
 
 - **Add** saves a new rectangle. **Clear** clears the details and highlights to
   prepare a new record; it does not delete anything.
-- Highlight one row to load its details, then use **Update**. Multiple highlights
+- Highlight one row to fill the form. **Add** creates another physical piece
+  from those values, with a new ID and independent history; **Update** modifies
+  the highlighted piece. This supports several rectangles cut from the same
+  bolt without re-entering their shared descriptions. Multiple highlights
   are for list selection, not bulk editing. Unsaved changes require confirmation
   before a navigation or close operation discards them.
+- All entry fields are **left-aligned**, including measurements. Controls have
+  fixed character widths reflecting expected input, rather than stretching with
+  the window. Measurements use six characters; longer fractions still fit as
+  scrollable input without restricting their accepted precision. Metadata keeps
+  full timestamps in SQLite but displays local dates and `HH:MM` only.
 - **History** shows before/after snapshots of every saved addition or change.
   No-op updates do not add history. Each save and its history commit together.
   Revision checks reject stale updates from another application instance.
@@ -48,6 +61,24 @@ Metric entry/conversion is not yet implemented.
   its record or history. Status changes can be reversed with Update. Retirement
   is not a cutting transaction. Dimensions can be corrected manually, with the
   reason recorded in Notes.
+
+### Standardized dropdowns
+
+Fabric Name, Color, Pattern Name and Storage Location use database-backed,
+read-only selection lists. Their order is **default first, Add Item second,
+then the remaining values alphabetically**, ignoring case. Initially the default
+is blank. Choose **Add Item** to enter a value without leaving the fabric form;
+Cancel leaves the previous value intact. Names differing only in ASCII letter
+case or surrounding whitespace reuse the existing spelling rather than creating
+duplicates. Saving fabric also registers/canonicalizes these values at the
+database boundary.
+
+Open **Setup/Utilities > Dropdown**, choose a field, highlight an item, and use
+**Set Default**. The next cleared/new form uses that default; existing records
+and unsaved form values are not changed. The setup page can also add items.
+Grain Direction, Print Direction and Status get their defaults from the same
+`Dropdown` table, but keep their defined choices: arbitrary directions or stock
+statuses cannot be added.
 
 ### Working lists
 
@@ -81,16 +112,18 @@ Press F1 in an editable field for help.
 
 ### Backup and restore
 
+The controls are on the **Setup/Utilities** page, not the fabric form.
 **Backup Database** uses SQLite's consistent backup API, checks the resulting
 database, and publishes it only when complete. Unsaved form edits are not
 included. Choose a **new filename**: existing files are never overwritten.
 Keep backups on a separate device as appropriate.
 
-**Restore to New Database** validates a selected backup and creates a separate
+**Restore Database** validates a selected backup and creates a separate
 database at a new filename. It neither replaces nor switches the open database.
 Close the application, then use the displayed `--database` command to open the
 restored copy. The original, backup and restored copy retain their IDs,
 relationships, history and automatic-ID counters.
+Version 0.1 backups can also be restored to a new file, then upgraded when opened.
 
 Keep the live SQLite database on a local disk, not a network share or actively
 synchronized folder. The application is intended for local desktop use, not
@@ -154,6 +187,9 @@ xvfb-run -a python -m unittest discover -v
 
 GUI tests require a display and are explicitly skipped without one. They exercise
 field bindings and round-trips, list alignment and button order, selection,
-filtering, saved sets, numeric sorting, unsaved edits and retirement.
+filtering, saved sets, numeric sorting, unsaved edits, duplication from a highlighted
+record, compact left-aligned entries, dropdown defaults, minute-level timestamps
+and retirement.
 Database tests cover validation, exact dimensions, stale updates, transaction
-rollback, history, persistence, error messages and backup/restore.
+rollback, history, persistence, error messages, dropdown normalization,
+backed-up upgrades/rollback and backup/restore.

@@ -8,12 +8,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .model import (
-    DEFAULT_SORT, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
+    ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
     Field, FieldError, caption, normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+DROPDOWN_SCHEMA = """
+CREATE TABLE Dropdown (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    TableName TEXT NOT NULL CHECK(TableName = 'FabricPiece'),
+    FieldName TEXT NOT NULL,
+    ListItem TEXT NOT NULL COLLATE NOCASE CHECK(length(ListItem) <= 120),
+    Def INTEGER NOT NULL DEFAULT 0 CHECK(Def IN (0, 1)),
+    Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
+    UNIQUE(TableName, FieldName, ListItem)
+);
+CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName)
+    WHERE Def = 1 AND Use = 1;
+"""
 SCHEMA = """
 CREATE TABLE FabricPiece (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +78,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-"""
+""" + DROPDOWN_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -73,6 +86,7 @@ TABLE_COLUMNS = {
     "SelectionMember": ("SelectionSetID", "FabricPieceID"),
     "ErrorText": ("ErrorTextID", "MessageKey", "Description", "MessageTemplate", "ResolutionText"),
     "ScreenState": ("ScreenName", "StateValues"),
+    "Dropdown": ("ID", "TableName", "FieldName", "ListItem", "Def", "Use"),
 }
 
 
@@ -81,8 +95,9 @@ def now():
 
 
 class Database:
-    def __init__(self, path):
+    def __init__(self, path, upgrade=False):
         self.path = Path(path).expanduser().resolve()
+        self.upgrade_backup = None
         new = not self.path.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if new:
@@ -103,8 +118,15 @@ class Database:
                         "INSERT INTO ErrorText (MessageKey, Description, MessageTemplate, ResolutionText) "
                         "VALUES (?, ?, ?, ?)", MESSAGES,
                     )
+                    self._seed_dropdowns()
+            elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
+                  and self.connection.execute("PRAGMA user_version").fetchone()[0] == 1):
+                self.validate(self.connection, allow_legacy=True)
+                if not upgrade:
+                    raise UpgradeRequired()
+                self._upgrade()
             self.validate(self.connection)
-        except (sqlite3.Error, FieldError):
+        except (sqlite3.Error, OSError, FieldError):
             self.connection.close()
             raise
 
@@ -112,11 +134,14 @@ class Database:
         self.connection.close()
 
     @staticmethod
-    def validate(connection):
+    def validate(connection, allow_legacy=False):
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION):
+                or version not in ((1, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version == 1 and table == "Dropdown":
+                continue
             columns = tuple(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
             if columns != expected:
                 raise FieldError("DatabaseFormat", "Database", detail=f"{table} has an unexpected schema.")
@@ -127,6 +152,108 @@ class Database:
         keys = {row[0] for row in connection.execute("SELECT MessageKey FROM ErrorText")}
         if not {message[0] for message in MESSAGES} <= keys:
             raise FieldError("DatabaseFormat", "ErrorText", detail="Required error messages are missing.")
+
+    def _upgrade(self):
+        backup = self.path.with_name(
+            f"PreUpgrade_{datetime.now(timezone.utc):%Y%m%d_%H%M%S_%f}_{self.path.name}",
+        )
+        self._copy_to_new(self.connection, backup)
+        self.upgrade_backup = backup
+        # All other clients must be closed before confirmation. Recheck under the write lock.
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.validate(self.connection, allow_legacy=True)
+            if self.connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+                raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
+            for statement in DROPDOWN_SCHEMA.split(";"):
+                if statement.strip():
+                    self.connection.execute(statement)
+            self._seed_dropdowns()
+            message = next(message for message in MESSAGES if message[0] == "Measurement")
+            self.connection.execute(
+                "UPDATE ErrorText SET Description = ?, MessageTemplate = ?, ResolutionText = ? "
+                "WHERE MessageKey = ?", (*message[1:], message[0]),
+            )
+            self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.validate(self.connection)
+            self.connection.commit()
+        except (sqlite3.Error, FieldError):
+            self.connection.rollback()
+            raise
+
+    def _seed_dropdowns(self):
+        for name, field in DROPDOWN_FIELDS.items():
+            items = field.choices if field.kind == "choice" else ("",)
+            for item in items:
+                self.connection.execute(
+                    "INSERT INTO Dropdown (TableName, FieldName, ListItem, Def) VALUES ('FabricPiece', ?, ?, ?)",
+                    (name, item, int(item == field.default)),
+                )
+            if field.kind == "dropdown":
+                for row in self.connection.execute(f'SELECT DISTINCT "{name}" FROM FabricPiece ORDER BY ID'):
+                    self._dropdown_item(name, row[0])
+
+    def _dropdown_item(self, name, value):
+        field = DROPDOWN_FIELDS.get(name)
+        if field is None:
+            raise FieldError("Choice", "FieldName")
+        clean = validate_fields((field,), {name: value})[name]
+        if clean.casefold() == ADD_ITEM.casefold():
+            raise FieldError("Choice", name)
+        row = self.connection.execute(
+            "SELECT ID, ListItem FROM Dropdown WHERE TableName = 'FabricPiece' AND FieldName = ? "
+            "AND ListItem = ? COLLATE NOCASE", (name, clean),
+        ).fetchone()
+        if row is not None:
+            self.connection.execute("UPDATE Dropdown SET Use = 1 WHERE ID = ?", (row["ID"],))
+            return row["ListItem"]
+        self.connection.execute(
+            "INSERT INTO Dropdown (TableName, FieldName, ListItem) VALUES ('FabricPiece', ?, ?)",
+            (name, clean),
+        )
+        return clean
+
+    def add_dropdown_item(self, name, value):
+        if not isinstance(value, str) or not value.strip():
+            raise FieldError("Required", name)
+        with self.connection:
+            return self._dropdown_item(name, value)
+
+    def dropdown_rows(self, name):
+        if name not in DROPDOWN_FIELDS:
+            raise FieldError("Choice", "FieldName")
+        return [dict(row) for row in self.connection.execute(
+            "SELECT * FROM Dropdown WHERE TableName = 'FabricPiece' AND FieldName = ? AND Use = 1 "
+            "ORDER BY Def DESC, ListItem COLLATE NOCASE, ID", (name,),
+        )]
+
+    def dropdown_default(self, name):
+        rows = self.dropdown_rows(name)
+        defaults = [row["ListItem"] for row in rows if row["Def"]]
+        if len(defaults) != 1:
+            raise FieldError("DatabaseFormat", name, detail="Exactly one active dropdown default is required.")
+        return defaults[0]
+
+    def dropdown_choices(self, name):
+        rows = self.dropdown_rows(name)
+        default = self.dropdown_default(name)
+        remaining = [row["ListItem"] for row in rows if row["ListItem"] != default]
+        if DROPDOWN_FIELDS[name].kind == "dropdown":
+            return (default, ADD_ITEM, *remaining)
+        return (default, *remaining)
+
+    def set_dropdown_default(self, item_id):
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT FieldName FROM Dropdown WHERE ID = ? AND Use = 1", (item_id,),
+            ).fetchone()
+            if row is None:
+                raise FieldError("MissingRecord", "DropdownID")
+            self.connection.execute(
+                "UPDATE Dropdown SET Def = 0 WHERE TableName = 'FabricPiece' AND FieldName = ?",
+                (row["FieldName"],),
+            )
+            self.connection.execute("UPDATE Dropdown SET Def = 1 WHERE ID = ?", (item_id,))
 
     def error_message(self, error):
         row = self.connection.execute(
@@ -149,6 +276,8 @@ class Database:
         clean = validate_fields(FABRIC_FIELDS, values)
         timestamp = now()
         with self.connection:
+            for name in DROPDOWN_FIELDS:
+                clean[name] = self._dropdown_item(name, clean[name])
             if piece_id is None:
                 columns = ", ".join(FABRIC_NAMES)
                 placeholders = ", ".join("?" for _ in FABRIC_NAMES)
@@ -288,7 +417,7 @@ class Database:
             target = sqlite3.connect(temporary)
             try:
                 source.backup(target)
-                Database.validate(target)
+                Database.validate(target, allow_legacy=True)
             finally:
                 target.close()
             # Publish only a complete copy; a racing destination must not be overwritten.
@@ -305,7 +434,12 @@ class Database:
         path = Path(source).expanduser().resolve()
         connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
         try:
-            Database.validate(connection)
+            Database.validate(connection, allow_legacy=True)
             return Database._copy_to_new(connection, destination)
         finally:
             connection.close()
+
+
+class UpgradeRequired(FieldError):
+    def __init__(self):
+        super().__init__("DatabaseFormat", "Database", detail="A backed-up database upgrade is required.")

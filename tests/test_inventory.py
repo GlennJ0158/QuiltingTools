@@ -3,10 +3,11 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from quilting.database import Database
+from quilting.database import Database, UpgradeRequired
 from quilting.model import (
-    FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_measurement,
+    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_measurement,
     measurement, normalize_sort, validate_fields,
 )
 
@@ -20,7 +21,7 @@ def fabric(**overrides):
 
 class MeasurementTests(unittest.TestCase):
     def test_exact_fraction_and_decimal_round_trips(self):
-        for value in ("42", "42 1/2", "1/64", "42.125", "0.000001", "0.123456", "100000"):
+        for value in ("42", "42 1/2", "1/64", "42.125", "0.000001", "0.123456", "10800"):
             with self.subTest(value=value):
                 stored = measurement(value, "UsableWidth")
                 self.assertEqual(measurement(display_measurement(stored), "UsableWidth"), stored)
@@ -29,7 +30,7 @@ class MeasurementTests(unittest.TestCase):
 
     def test_invalid_measurements(self):
         for value in ("", "0", "-1", "nan", "inf", "1e2", "1/0", "1/3", "2/2",
-                      "1 -1/2", "42 in", "1.1234567", "100000.000001", "9" * 1000):
+                      "1 -1/2", "42 in", "1.1234567", "10800.000001", "10801", "9" * 1000):
             with self.subTest(value=value), self.assertRaises(FieldError):
                 measurement(value, "UsableLength")
 
@@ -220,6 +221,89 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(FieldError) as raised:
             self.db.load_sort()
         self.assertEqual(raised.exception.key, "DatabaseFormat")
+
+    def test_dropdown_default_order_canonicalization_and_persistence(self):
+        for value in ("Yellow", "blue", "Amber"):
+            self.db.add_dropdown_item("Color", value)
+        default = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "blue")
+        self.db.set_dropdown_default(default["ID"])
+        self.assertEqual(self.db.dropdown_choices("Color"), ("blue", ADD_ITEM, "", "Amber", "Yellow"))
+        self.assertEqual(self.db.add_dropdown_item("Color", " BLUE "), "blue")
+        piece_id = self.db.save_piece(fabric(Color="BLUE"))
+        self.assertEqual(self.db.get_piece(piece_id)["Color"], "blue")
+        self.assertEqual(len([row for row in self.db.dropdown_rows("Color")
+                              if row["ListItem"].lower() == "blue"]), 1)
+        self.db.close()
+        self.db = Database(self.path)
+        self.assertEqual(self.db.dropdown_default("Color"), "blue")
+        self.assertEqual(self.db.dropdown_choices("Color")[1], ADD_ITEM)
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_item("Color", ADD_ITEM)
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_item("GrainDirection", "Diagonal")
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_item("Color", " " * 4)
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_item("Notes", "Not a dropdown")
+
+    def make_legacy_database(self):
+        piece_id = self.db.save_piece(fabric(Color="Sage", StorageLocation="Bin C"))
+        self.db.save_set("Keep these", [piece_id])
+        self.db.save_sort([("UsableWidth", "desc")])
+        with self.db.connection:
+            self.db.connection.execute("DROP TABLE Dropdown")
+            self.db.connection.execute("PRAGMA user_version = 1")
+        before = {
+            table: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")]
+            for table in ("FabricPiece", "FabricHistory", "SelectionSet", "SelectionMember", "ScreenState")
+        }
+        error_ids = [tuple(row) for row in self.db.connection.execute(
+            "SELECT ErrorTextID, MessageKey FROM ErrorText ORDER BY ErrorTextID",
+        )]
+        self.db.close()
+        return piece_id, before, error_ids
+
+    def test_version_one_requires_consent_and_upgrade_preserves_existing_data(self):
+        piece_id, before, error_ids = self.make_legacy_database()
+        original = self.path.read_bytes()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(list(self.path.parent.glob("PreUpgrade_*")), [])
+        self.db = Database(self.path, upgrade=True)
+        for table, rows in before.items():
+            self.assertEqual(rows, [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")])
+        self.assertEqual(error_ids, [tuple(row) for row in self.db.connection.execute(
+            "SELECT ErrorTextID, MessageKey FROM ErrorText ORDER BY ErrorTextID",
+        )])
+        self.assertEqual(self.db.dropdown_choices("Color"), ("", ADD_ITEM, "Sage"))
+        self.assertEqual(self.db.dropdown_choices("StorageLocation"), ("", ADD_ITEM, "Bin C"))
+        self.assertTrue(self.db.upgrade_backup.exists())
+        backup = sqlite3.connect(self.db.upgrade_backup)
+        try:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(tuple(backup.execute("SELECT * FROM FabricPiece").fetchone()), before["FabricPiece"][0])
+        finally:
+            backup.close()
+        self.assertGreater(self.db.save_piece(fabric()), piece_id)
+        self.assertEqual(len(self.db.sets()), 1)
+
+    def test_failed_upgrade_rolls_back_schema_and_keeps_backup(self):
+        _, before, _ = self.make_legacy_database()
+        with patch.object(Database, "_seed_dropdowns", side_effect=sqlite3.IntegrityError("seed failed")):
+            with self.assertRaises(sqlite3.IntegrityError):
+                Database(self.path, upgrade=True)
+        connection = sqlite3.connect(self.path)
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'Dropdown'",
+            ).fetchone())
+            self.assertEqual(connection.execute("SELECT * FROM FabricPiece").fetchall(), before["FabricPiece"])
+        finally:
+            connection.close()
+        self.assertEqual(len(list(self.path.parent.glob("PreUpgrade_*"))), 1)
+        self.db = Database(self.path, upgrade=True)
 
 
 if __name__ == "__main__":

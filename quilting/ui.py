@@ -5,12 +5,12 @@ import sqlite3
 import traceback
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import VERSION
 from .database import Database
 from .model import (
-    DEFAULT_SORT, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
+    ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
     SORT_FIELDS, Field, FieldError, caption, display_measurement, normalize_sort, validate_fields,
 )
 
@@ -42,13 +42,20 @@ HELP = {
 }
 
 
+def display_timestamp(value):
+    """Keep the date while displaying local time only to the minute."""
+    return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
-    def __init__(self, parent, fields, columns=2, style="TFrame"):
+    def __init__(self, parent, fields, columns=2, style="TFrame", database=None, on_error=None):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
+        self.database, self.on_error = database, on_error
         self.variables, self.widgets = {}, {}
+        self.previous_choices = {}
         label_style = "Entry.TLabel" if style == "Entry.TFrame" else "TLabel"
         for index, field in enumerate(self.fields):
             row, pair = divmod(index, columns)
@@ -57,17 +64,54 @@ class Form(ttk.Frame):
                 row=row, column=column, sticky="w", padx=(4, 8), pady=4,
             )
             variable = tk.StringVar(master=self, value=field.default)
-            if field.kind == "choice":
+            if field.kind in ("choice", "dropdown"):
                 widget = ttk.Combobox(self, textvariable=variable, values=field.choices,
-                                      state="readonly", width=28)
+                                      state="readonly", width=field.width, justify="left")
             else:
-                widget = ttk.Entry(self, textvariable=variable, width=30,
-                                   justify="right" if field.kind == "length" else "left")
-            widget.grid(row=row, column=column + 1, sticky="ew", padx=(0, 20), pady=4)
+                widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
+            widget.grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
             widget.bind("<F1>", lambda event, item=field: self.help(item))
             self.variables[field.name], self.widgets[field.name] = variable, widget
+            if database is not None and field.name in DROPDOWN_FIELDS:
+                widget.bind("<<ComboboxSelected>>", lambda event, name=field.name: self.choose_item(name))
+                variable.trace_add("write", lambda *_, name=field.name: self.remember_choice(name))
             self.columnconfigure(column + 1, weight=1)
+        if database is not None:
+            self.defaults()
         self.assert_bindings()
+
+    def remember_choice(self, name):
+        value = self.variables[name].get()
+        if value != ADD_ITEM:
+            self.previous_choices[name] = value
+
+    def refresh_choices(self):
+        if self.database is not None:
+            for name in self.variables:
+                if name in DROPDOWN_FIELDS:
+                    self.widgets[name].configure(values=self.database.dropdown_choices(name))
+
+    def choose_item(self, name):
+        if self.variables[name].get() != ADD_ITEM:
+            return
+        previous = self.previous_choices.get(name, "")
+        # Never leave the action sentinel in an inventory form, including after Cancel or an error.
+        self.variables[name].set(previous)
+        try:
+            item = simpledialog.askstring("Add Item", f"{caption(name)}: Enter a new list item.",
+                                          parent=self.winfo_toplevel())
+            if item is not None:
+                stored = self.database.add_dropdown_item(name, item)
+                self.refresh_choices()
+                self.variables[name].set(stored)
+        except FieldError as error:
+            if self.on_error is None:
+                raise
+            self.on_error(error)
+        except (sqlite3.Error, OSError) as error:
+            if self.on_error is None:
+                raise
+            self.on_error(FieldError("Database", name, detail=str(error)))
 
     def assert_bindings(self):
         names = {field.name for field in self.fields}
@@ -83,13 +127,18 @@ class Form(ttk.Frame):
 
     def assign(self, values):
         self.assert_bindings()
+        self.refresh_choices()
         if set(values) != set(self.variables):
             raise FieldError("Binding", "Form", detail="loaded values do not match the form fields")
         for name, value in values.items():
             self.variables[name].set(value)
 
     def defaults(self):
-        self.assign({field.name: field.default for field in self.fields})
+        self.assign({
+            field.name: self.database.dropdown_default(field.name)
+            if self.database is not None and field.name in DROPDOWN_FIELDS else field.default
+            for field in self.fields
+        })
 
     def focus_field(self, name):
         if name in self.widgets:
@@ -131,6 +180,7 @@ class RecordList(ttk.Frame):
         for row in rows:
             values = [
                 display_measurement(row[name]) if name in ("UsableWidth", "UsableLength")
+                else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else row[name] for name in self.columns
             ]
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
@@ -156,12 +206,18 @@ class Application:
         style = ttk.Style(root)
         style.configure("Entry.TFrame", background="#c3dafd")
         style.configure("Entry.TLabel", background="#c3dafd")
-        body = ttk.Frame(root)
-        body.pack(fill="both", expand=True)
+        self.pages = ttk.Notebook(root)
+        self.pages.pack(fill="both", expand=True)
+        body = ttk.Frame(self.pages)
+        self.inventory_page = body
+        self.setup_page = ttk.Frame(self.pages, padding=12)
+        self.pages.add(body, text="Fabric Inventory")
+        self.pages.add(self.setup_page, text="Setup/Utilities")
         ttk.Label(body, text=f"Fabric Inventory - v{VERSION}", font=("TkDefaultFont", 14, "bold"),
                   padding=8).pack(anchor="w")
         ttk.Label(body, text=f"Database: {self.db.path}", padding=(8, 0, 8, 4)).pack(anchor="w")
-        self.form = Form(body, FABRIC_FIELDS, style="Entry.TFrame")
+        self.form = Form(body, FABRIC_FIELDS, style="Entry.TFrame",
+                         database=self.db, on_error=self.show_error)
         self.form.pack(fill="x")
         self.details = ttk.Label(body, text="New fabric rectangle", padding=(8, 4))
         self.details.pack(anchor="w")
@@ -171,9 +227,16 @@ class Application:
         self.update_button = self.button(actions, "Update", self.update)
         self.button(actions, "Clear", self.clear)
         self.button(actions, "History", self.open_history)
-        self.button(actions, "Backup Database", self.backup)
-        self.button(actions, "Restore to New Database", self.restore)
         self.button(actions, "Screen Help", self.screen_help)
+        ttk.Label(self.setup_page, text="Setup/Utilities", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        ttk.Label(self.setup_page, text=f"Database: {self.db.path}", padding=(0, 8)).pack(anchor="w")
+        utilities = ttk.Frame(self.setup_page)
+        utilities.pack(fill="x", pady=8)
+        self.button(utilities, "Dropdown", self.open_dropdowns)
+        self.button(utilities, "Backup Database", self.backup)
+        self.button(utilities, "Restore Database", self.restore)
+        ttk.Label(self.setup_page, text="Restore creates a new database; it never replaces the open one. "
+                  "Dropdown defaults apply to new forms, not existing inventory.", wraplength=800).pack(anchor="w")
         tools = ttk.Frame(body, padding=(8, 0))
         tools.pack(fill="x")
         self.list_buttons = []
@@ -254,9 +317,10 @@ class Application:
         self.initial_values = self.form.values()
         self.details.configure(
             text=f"ID: {piece_id}    Revision: {self.revision}    "
-                 f"Created: {row['DateCreated']}    Modified: {row['DateModified']}",
+                 f"Created: {display_timestamp(row['DateCreated'])}    "
+                 f"Modified: {display_timestamp(row['DateModified'])}",
         )
-        self.add_button.state(["disabled"])
+        self.add_button.state(["!disabled"])
         self.update_button.state(["!disabled"])
 
     def on_select(self):
@@ -305,7 +369,7 @@ class Application:
             self.clear_details()
 
     def add(self):
-        if self.piece_id is not None or self.list.tree.selection():
+        if len(self.list.tree.selection()) > 1:
             raise FieldError("OneRecord", "Fabric Inventory")
         piece_id = self.db.save_piece(self.form.values())
         self.initial_values = self.form.values()
@@ -366,6 +430,52 @@ class Application:
         self.button(actions, "Apply", apply)
         self.button(actions, "Clear Fields", form.defaults)
         self.button(actions, "Cancel", window.destroy)
+
+    def open_dropdowns(self):
+        window = self.dialog("Dropdown")
+        window.geometry("760x520")
+        names = {caption(name): name for name in DROPDOWN_FIELDS}
+        fields = (
+            Field("FieldName", "choice", choices=tuple(names), default=next(iter(names))),
+            Field("ListItem"),
+        )
+        form = Form(window, fields)
+        form.pack(fill="x")
+        ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
+                  "add form. Defined grain, print and status choices cannot be extended.",
+                  wraplength=720, padding=8).pack(anchor="w")
+        actions = ttk.Frame(window, padding=8)
+        actions.pack(fill="x")
+        listing = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
+        listing.pack(fill="both", expand=True)
+
+        def field_name():
+            return names[validate_fields(fields, form.values())["FieldName"]]
+
+        def refresh():
+            name = field_name()
+            rows = self.db.dropdown_rows(name)
+            for row in rows:
+                row["FieldName"] = caption(row["FieldName"])
+            listing.fill(rows, "dropdown records", (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc")))
+            self.form.refresh_choices()
+
+        def add():
+            self.db.add_dropdown_item(field_name(), form.values()["ListItem"])
+            refresh()
+
+        def set_default():
+            selected = listing.tree.selection()
+            if len(selected) != 1:
+                raise FieldError("OneRecord", "Dropdown")
+            self.db.set_dropdown_default(int(selected[0]))
+            refresh()
+
+        self.button(actions, "Add Item", add)
+        self.button(actions, "Set Default", set_default)
+        self.button(actions, "Close", window.destroy)
+        form.widgets["FieldName"].bind("<<ComboboxSelected>>", self.command(refresh))
+        refresh()
 
     def open_sort(self):
         window = self.dialog("Sort Fabric Inventory")
@@ -477,6 +587,8 @@ class Application:
                     for name, value in snapshot.items():
                         if name in ("UsableWidth", "UsableLength"):
                             value = display_measurement(value) + " in"
+                        elif name in ("DateCreated", "DateModified"):
+                            value = display_timestamp(value)
                         lines.append(f"  {caption(name)}: {value}")
             text.configure(state="normal")
             text.delete("1.0", "end")
@@ -524,13 +636,15 @@ class Application:
             "Fabric Inventory Help",
             "Each record is one usable fabric rectangle. Dimensions are in inches, excluding selvage "
             "and damaged edges. Press F1 in a field for help.\n\n"
-            "Add creates a new piece. Highlight one row to edit it, then use Update. Clear discards "
+            "Highlight one row to fill the form. Add creates a separate piece from these values; "
+            "Update changes the highlighted piece. Clear discards "
             "details and starts a new piece. History shows saved changes. Retire a piece instead of "
             "deleting it; record actual remaining dimensions when making an inventory correction.\n\n"
             "Select Highlighted restricts the working list to highlighted rows. Filter applies text, "
             "minimum-size and status criteria. Set Selection saves the whole working list, or recalls "
             "a snapshot and clears other restrictions. Sort supports multiple fields. Reset Selection "
             "shows all records, including retired ones. The initial view shows Available pieces.\n\n"
+            "Setup/Utilities contains Dropdown defaults, Backup Database and Restore Database. "
             "Backup saves committed data to a new file. Restore creates a separate verified database "
             "and never changes your open database. Keep the live database on a local disk; "
             "coordinate restores and future upgrades with other users.\n\n"

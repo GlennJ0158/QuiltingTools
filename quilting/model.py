@@ -6,7 +6,8 @@ from decimal import Decimal
 from fractions import Fraction
 
 UNITS_PER_INCH = 1_000_000
-MAX_INCHES = 100_000
+MAX_INCHES = 10_800
+ADD_ITEM = "Add Item"
 GRAIN_DIRECTIONS = ("Unknown", "Along Length", "Along Width")
 PRINT_DIRECTIONS = ("Non-directional", "Along Length", "Along Width", "Unknown")
 STATUSES = ("Available", "Retired")
@@ -30,6 +31,7 @@ class Field:
     choices: tuple[str, ...] = ()
     limit: int = 120
     default: str = ""
+    width: int = 24
 
     @property
     def label(self):
@@ -37,28 +39,29 @@ class Field:
 
 
 FABRIC_FIELDS = (
-    Field("FabricName", required=True),
-    Field("Color"),
-    Field("PatternName"),
-    Field("UsableWidth", "length", True),
-    Field("UsableLength", "length", True),
+    Field("FabricName", "dropdown", required=True),
+    Field("Color", "dropdown"),
+    Field("PatternName", "dropdown"),
+    Field("UsableWidth", "length", True, width=6),
+    Field("UsableLength", "length", True, width=6),
     Field("GrainDirection", "choice", True, GRAIN_DIRECTIONS, default="Unknown"),
     Field("PrintDirection", "choice", True, PRINT_DIRECTIONS, default="Unknown"),
-    Field("StorageLocation"),
+    Field("StorageLocation", "dropdown"),
     Field("Status", "choice", True, STATUSES, default="Available"),
-    Field("Notes", limit=4000),
+    Field("Notes", limit=4000, width=40),
 )
 FILTER_FIELDS = (
     Field("FabricName"),
     Field("Color"),
     Field("PatternName"),
     Field("StorageLocation"),
-    Field("MinimumWidth", "length"),
-    Field("MinimumLength", "length"),
+    Field("MinimumWidth", "length", width=6),
+    Field("MinimumLength", "length", width=6),
     Field("Status", "choice", choices=("", *STATUSES)),
 )
 FABRIC_NAMES = tuple(field.name for field in FABRIC_FIELDS)
-NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "Revision", "RecordCount"))
+DROPDOWN_FIELDS = {field.name: field for field in FABRIC_FIELDS if field.kind in ("dropdown", "choice")}
+NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "Revision", "RecordCount", "Def", "Use"))
 LIST_COLUMNS = (
     "ID", "FabricName", "Color", "PatternName", "UsableWidth", "UsableLength",
     "GrainDirection", "PrintDirection", "StorageLocation", "Status",
@@ -73,7 +76,7 @@ MESSAGES = (
     ("Choice", "A choice is not in the field's permitted list.",
      "The value is not one of the permitted choices.", "Choose a value from the list."),
     ("Measurement", "A dimension cannot be parsed exactly as a positive inch measurement.",
-     "Enter a positive measurement no larger than 100,000 inches, using at most six decimal "
+     "Enter a positive measurement no larger than 10,800 inches, using at most six decimal "
      "places or a fraction in halves through sixty-fourths.",
      "Examples: 42, 42.5, 42 1/2, or 1/4. Do not include unit symbols."),
     ("Binding", "A form control is missing a variable or a supplied field is unrecognized.",
