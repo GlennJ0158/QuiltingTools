@@ -5,41 +5,50 @@ import sqlite3
 import traceback
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION
 from .database import Database
+from .helptext import HELP_COLUMNS, HELP_FIELDS, NAVIGATION
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
     SORT_FIELDS, Field, FieldError, caption, display_measurement, normalize_sort, validate_fields,
 )
 
-HELP = {
-    "FabricName": "Required. Identify the fabric. Each record describes one physical rectangle, "
-                  "even when several rectangles have the same fabric name.",
-    "Color": "Optional color description. Filters match text contained anywhere in this value.",
-    "PatternName": "Optional fabric print or design name, not a quilt construction pattern.",
-    "UsableWidth": "Required usable width in inches, excluding selvage and damaged edges. "
-                   "Enter 42, 42.5, or 42 1/2. Fractions through 1/64 and up to six decimal places "
-                   "are stored exactly. Width and length retain the orientation you assign.",
-    "UsableLength": "Required usable length in inches. Use a whole number, decimal, or fraction "
-                    "through 1/64. Do not include unit symbols.",
-    "GrainDirection": "The direction of lengthwise grain relative to this rectangle's width and "
-                      "length. Unknown is explicit; it does not mean rotation is safe.",
-    "PrintDirection": "The orientation of a directional print relative to the rectangle. "
-                      "Non-directional means rotation does not affect the print's orientation.",
-    "StorageLocation": "Optional shelf, bin or other physical storage location.",
-    "Status": "Available means this physical piece is usable. Retired removes it from available "
-              "stock without deleting its history. Retiring does not represent a cutting transaction.",
-    "Notes": "Optional notes, up to 4,000 characters. Press Home/End to navigate a long entry.",
-    "MinimumWidth": "Inclusive minimum usable width, in inches. Blank means no minimum. "
-                    "This filter does not automatically rotate rectangles.",
-    "MinimumLength": "Inclusive minimum usable length, in inches. Blank means no minimum.",
-    "SetName": "A unique name for a snapshot of all records in the current working list, "
-                "not just highlighted rows. Applying a set clears other list restrictions.",
-    "SavedSet": "Choose a saved selection set. Its membership is a snapshot of record IDs; "
-                "later edits to those records do not remove them from the set.",
-}
+
+class ToolTip:
+    """Look up current database text on hover; never retain a grab or stale window."""
+
+    def __init__(self, widget, text):
+        self.widget, self.text = widget, text
+        self.window = self.timer = None
+        widget.bind("<Enter>", self.schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+        widget.bind("<Unmap>", self.hide, add="+")
+        widget.bind("<Destroy>", self.hide, add="+")
+
+    def schedule(self, event=None):
+        self.hide()
+        self.timer = self.widget.after(450, self.show)
+
+    def show(self):
+        self.timer = None
+        text = self.text()
+        if not text:
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.overrideredirect(True)
+        self.window.geometry(f"+{self.widget.winfo_pointerx() + 12}+{self.widget.winfo_pointery() + 18}")
+        ttk.Label(self.window, text=text, wraplength=480, padding=8, relief="solid").pack()
+
+    def hide(self, event=None):
+        if self.timer is not None:
+            self.widget.after_cancel(self.timer)
+            self.timer = None
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
 
 
 def display_timestamp(value):
@@ -50,28 +59,34 @@ def display_timestamp(value):
 class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
-    def __init__(self, parent, fields, columns=2, style="TFrame", database=None, on_error=None):
+    def __init__(self, parent, fields, columns=2, style="TFrame", database=None):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
-        self.database, self.on_error = database, on_error
+        self.database = database
         self.variables, self.widgets = {}, {}
         self.previous_choices = {}
+        owner = self.winfo_toplevel().help_owner
         label_style = "Entry.TLabel" if style == "Entry.TFrame" else "TLabel"
         for index, field in enumerate(self.fields):
             row, pair = divmod(index, columns)
             column = pair * 2
-            ttk.Label(self, text=field.label, style=label_style).grid(
-                row=row, column=column, sticky="w", padx=(4, 8), pady=4,
-            )
+            label = ttk.Label(self, text=field.label, style=label_style)
+            label.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
+            owner.attach_help(label, field.name)
             variable = tk.StringVar(master=self, value=field.default)
-            if field.kind in ("choice", "dropdown"):
+            if field.kind == "memo":
+                widget = tk.Text(self, width=field.width, height=3 if field.name == "HoverText" else 6,
+                                 wrap="word", undo=True)
+                variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
+                widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
+            elif field.kind in ("choice", "dropdown"):
                 widget = ttk.Combobox(self, textvariable=variable, values=field.choices,
                                       state="readonly", width=field.width, justify="left")
             else:
                 widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
             widget.grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
-            widget.bind("<F1>", lambda event, item=field: self.help(item))
             self.variables[field.name], self.widgets[field.name] = variable, widget
+            owner.attach_help(widget, field.name)
             if database is not None and field.name in DROPDOWN_FIELDS:
                 widget.bind("<<ComboboxSelected>>", lambda event, name=field.name: self.choose_item(name))
                 variable.trace_add("write", lambda *_, name=field.name: self.remember_choice(name))
@@ -79,6 +94,21 @@ class Form(ttk.Frame):
         if database is not None:
             self.defaults()
         self.assert_bindings()
+
+    def assign_text(self, name):
+        widget = self.widgets[name]
+        value = self.variables[name].get()
+        if widget.get("1.0", "end-1c") != value:
+            widget.delete("1.0", "end")
+            widget.insert("1.0", value)
+            widget.edit_reset()
+        widget.edit_modified(False)
+
+    def read_text(self, name):
+        widget = self.widgets[name]
+        if widget.edit_modified():
+            self.variables[name].set(widget.get("1.0", "end-1c"))
+            widget.edit_modified(False)
 
     def remember_choice(self, name):
         value = self.variables[name].get()
@@ -97,32 +127,23 @@ class Form(ttk.Frame):
         previous = self.previous_choices.get(name, "")
         # Never leave the action sentinel in an inventory form, including after Cancel or an error.
         self.variables[name].set(previous)
-        try:
-            item = simpledialog.askstring("Add Item", f"{caption(name)}: Enter a new list item.",
-                                          parent=self.winfo_toplevel())
-            if item is not None:
-                stored = self.database.add_dropdown_item(name, item)
-                self.refresh_choices()
-                self.variables[name].set(stored)
-        except FieldError as error:
-            if self.on_error is None:
-                raise
-            self.on_error(error)
-        except (sqlite3.Error, OSError) as error:
-            if self.on_error is None:
-                raise
-            self.on_error(FieldError("Database", name, detail=str(error)))
+        self.winfo_toplevel().help_owner.open_add_item(self, name)
 
     def assert_bindings(self):
         names = {field.name for field in self.fields}
         if len(names) != len(self.fields) or set(self.variables) != names or set(self.widgets) != names:
             raise FieldError("Binding", "Form", detail="field, variable and widget registries differ")
         for name in names:
+            if isinstance(self.widgets[name], tk.Text):
+                continue
             if str(self.widgets[name].cget("textvariable")) != str(self.variables[name]):
                 raise FieldError("Binding", name, detail="the control is not assigned to its variable")
 
     def values(self):
         self.assert_bindings()
+        for field in self.fields:
+            if field.kind == "memo":
+                self.read_text(field.name)
         return {name: variable.get() for name, variable in self.variables.items()}
 
     def assign(self, values):
@@ -144,13 +165,6 @@ class Form(ttk.Frame):
         if name in self.widgets:
             self.widgets[name].focus_set()
 
-    def help(self, field):
-        messagebox.showinfo(
-            field.label, HELP.get(field.name, f"Choose {field.label.lower()} for this operation."),
-            parent=self,
-        )
-        return "break"
-
 
 class RecordList(ttk.Frame):
     def __init__(self, parent, columns):
@@ -159,6 +173,19 @@ class RecordList(ttk.Frame):
         self.heading = ttk.Label(self, text="", wraplength=1100)
         self.heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 3))
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
+        owner = self.winfo_toplevel().help_owner
+        self.tree.help_column = columns[0]
+        owner.attach_help(self.tree, lambda: f"Column:{self.tree.help_column}")
+
+        def column_help(event):
+            column = self.tree.identify_column(event.x)
+            if column:
+                name = columns[int(column[1:]) - 1]
+                if name != self.tree.help_column:
+                    self.tree.help_column = name
+                    self.tree.tooltip.schedule()
+
+        self.tree.bind("<Motion>", column_help, add="+")
         for name in columns:
             anchor = "e" if name in NUMERIC_COLUMNS else "w"
             label = caption(name) + (" (in)" if name in ("UsableWidth", "UsableLength") else "")
@@ -191,6 +218,10 @@ class RecordList(ttk.Frame):
 class Application:
     def __init__(self, root, database):
         self.root, self.db = root, database
+        root.help_owner = self
+        self.current = "Fabric"
+        self.dialogs, self.dialog_forms = [], {}
+        self.help_id = None
         self.filters = {field.name: "" for field in FILTER_FIELDS}
         self.filters["Status"] = "Available"
         self.selected_ids = None
@@ -206,18 +237,23 @@ class Application:
         style = ttk.Style(root)
         style.configure("Entry.TFrame", background="#c3dafd")
         style.configure("Entry.TLabel", background="#c3dafd")
-        self.pages = ttk.Notebook(root)
+        self.nav = self.navigation(root)
+        self.pages = ttk.Frame(root)
         self.pages.pack(fill="both", expand=True)
         body = ttk.Frame(self.pages)
         self.inventory_page = body
+        self.dropdown_page = ttk.Frame(self.pages, padding=8)
+        self.help_page = ttk.Frame(self.pages, padding=8)
         self.setup_page = ttk.Frame(self.pages, padding=12)
-        self.pages.add(body, text="Fabric Inventory")
-        self.pages.add(self.setup_page, text="Setup/Utilities")
+        self.screens = {"Fabric": body, "DropDown": self.dropdown_page,
+                        "HelpText": self.help_page, "Setup": self.setup_page}
+        for name, page in self.screens.items():
+            page.help_screen = name
+        body.pack(fill="both", expand=True)
         ttk.Label(body, text=f"Fabric Inventory - v{VERSION}", font=("TkDefaultFont", 14, "bold"),
                   padding=8).pack(anchor="w")
         ttk.Label(body, text=f"Database: {self.db.path}", padding=(8, 0, 8, 4)).pack(anchor="w")
-        self.form = Form(body, FABRIC_FIELDS, style="Entry.TFrame",
-                         database=self.db, on_error=self.show_error)
+        self.form = Form(body, FABRIC_FIELDS, style="Entry.TFrame", database=self.db)
         self.form.pack(fill="x")
         self.details = ttk.Label(body, text="New fabric rectangle", padding=(8, 4))
         self.details.pack(anchor="w")
@@ -227,12 +263,10 @@ class Application:
         self.update_button = self.button(actions, "Update", self.update)
         self.button(actions, "Clear", self.clear)
         self.button(actions, "History", self.open_history)
-        self.button(actions, "Screen Help", self.screen_help)
         ttk.Label(self.setup_page, text="Setup/Utilities", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
         ttk.Label(self.setup_page, text=f"Database: {self.db.path}", padding=(0, 8)).pack(anchor="w")
         utilities = ttk.Frame(self.setup_page)
         utilities.pack(fill="x", pady=8)
-        self.button(utilities, "Dropdown", self.open_dropdowns)
         self.button(utilities, "Backup Database", self.backup)
         self.button(utilities, "Restore Database", self.restore)
         ttk.Label(self.setup_page, text="Restore creates a new database; it never replaces the open one. "
@@ -257,6 +291,81 @@ class Application:
         self.initial_values = self.form.values()
         self.clear_details()
         self.refresh()
+        self.build_dropdowns()
+        self.build_helptext()
+
+    def context(self, widget):
+        while widget is not None:
+            if hasattr(widget, "help_screen"):
+                return widget.help_screen
+            widget = widget.master
+        return self.current
+
+    def attach_help(self, widget, name):
+        def key():
+            return self.context(widget), name() if callable(name) else name
+
+        widget.help_key = key
+        widget.tooltip = ToolTip(widget, lambda: self.db.help_pair(*key())[0])
+
+        def show(event):
+            self.command(lambda: self.show_help(*key()))()
+            return "break"
+
+        widget.bind("<F1>", show, add="+")
+
+    def navigation(self, parent):
+        bar = ttk.Frame(parent, padding=(8, 4))
+        bar.pack(fill="x", side="top")
+        buttons = ttk.Frame(bar)
+        buttons.pack(side="right")
+        bar.buttons = {}
+        for label in NAVIGATION:
+            action = (lambda parent=parent: self.screen_help(parent)) if label == "Screen Help" else (
+                lambda name=label: self.show_screen(name))
+            bar.buttons[label] = self.button(buttons, label, action)
+        return bar
+
+    def unfinished(self):
+        forms = []
+        if self.current == "Fabric":
+            forms.append((self.form, self.initial_values))
+        elif self.current == "DropDown":
+            forms.append((self.dropdown_form, self.dropdown_initial))
+        elif self.current == "HelpText":
+            forms.append((self.help_form, self.help_initial))
+        forms.extend(self.dialog_forms.values())
+        return any(form.values() != initial for form, initial in forms)
+
+    def allow_navigation(self):
+        return not self.unfinished() or messagebox.askyesno(
+            "Unsaved Changes", "Discard unsaved work and close unfinished operations?",
+            parent=self.root.grab_current() or self.root,
+        )
+
+    def show_screen(self, name):
+        if name not in self.screens:
+            raise FieldError("Choice", "Screen")
+        if not self.allow_navigation():
+            return
+        for window in list(reversed(self.dialogs)):
+            window.destroy()
+        self.list.tree.selection_remove(self.list.tree.selection())
+        self.last_selection = ()
+        self.clear_details()
+        self.dropdown_form.variables["ListItem"].set("")
+        self.dropdown_initial = self.dropdown_form.values()
+        self.clear_help()
+        if name == "Fabric":
+            self.refresh()
+        elif name == "DropDown":
+            self.refresh_dropdowns()
+        elif name == "HelpText":
+            self.refresh_help()
+        self.screens[self.current].pack_forget()
+        self.current = name
+        self.screens[name].pack(fill="both", expand=True)
+        self.root.title(f"Quilting Tools v{VERSION} - {name}")
 
     def command(self, action):
         def run(*_):
@@ -276,11 +385,10 @@ class Application:
             text = f"{caption(error.field)}: {error}\n\nError catalog failure: {catalog_error}"
         parent = self.root.grab_current() or self.root
         messagebox.showerror("Quilting Tools", text, parent=parent)
-        for form in parent.winfo_children():
+        container = self.screens[self.current] if parent == self.root else parent
+        for form in container.winfo_children():
             if isinstance(form, Form):
                 form.focus_field(error.field)
-        if parent == self.root:
-            self.form.focus_field(error.field)
 
     def callback_error(self, exception_type, error, trace):
         traceback.print_exception(exception_type, error, trace)
@@ -289,6 +397,7 @@ class Application:
     def button(self, parent, text, action):
         widget = ttk.Button(parent, text=text, command=self.command(action))
         widget.pack(side="left", padx=(0, 5))
+        self.attach_help(widget, f"Button:{text}")
         return widget
 
     def dirty(self):
@@ -403,19 +512,34 @@ class Application:
             self.selected_ids, self.selection_description = None, ""
             self.refresh()
 
-    def dialog(self, title):
+    def dialog(self, title, screen):
         window = tk.Toplevel(self.root)
+        window.help_owner, window.help_screen = self, screen
         window.title(title)
         window.transient(self.root)
+        window.minsize(520, 200)
+        window.nav = self.navigation(window)
+        self.dialogs.append(window)
         window.grab_set()
+        window.bind("<Destroy>", lambda event: self.dialog_closed(window) if event.widget == window else None)
         window.bind("<Escape>", lambda _: window.destroy())
         return window
 
+    def dialog_closed(self, window):
+        self.dialogs.remove(window)
+        self.dialog_forms.pop(window, None)
+        if self.dialogs:
+            self.dialogs[-1].grab_set()
+
+    def watch_dialog(self, window, form):
+        self.dialog_forms[window] = form, form.values()
+
     def open_filter(self):
-        window = self.dialog("Filter Fabric Inventory")
+        window = self.dialog("Filter Fabric Inventory", "Filter")
         form = Form(window, FILTER_FIELDS, columns=1)
         form.pack(fill="both", expand=True)
         form.assign(self.filters)
+        self.watch_dialog(window, form)
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
 
@@ -432,53 +556,149 @@ class Application:
         self.button(actions, "Cancel", window.destroy)
 
     def open_dropdowns(self):
-        window = self.dialog("Dropdown")
-        window.geometry("760x520")
-        names = {caption(name): name for name in DROPDOWN_FIELDS}
+        self.show_screen("DropDown")
+
+    def open_add_item(self, source, name):
+        window = self.dialog(f"Add Item - {caption(name)}", "Add Item")
+        form = Form(window, (Field("ListItem", required=True),), columns=1)
+        form.pack(fill="x")
+        self.watch_dialog(window, form)
+
+        def add():
+            item = validate_fields(form.fields, form.values())["ListItem"]
+            stored = self.db.add_dropdown_item(name, item)
+            source.refresh_choices()
+            source.variables[name].set(stored)
+            window.destroy()
+
+        actions = ttk.Frame(window, padding=8)
+        actions.pack(fill="x")
+        self.button(actions, "Add Item", add)
+        self.button(actions, "Cancel", window.destroy)
+        form.focus_field("ListItem")
+
+    def build_dropdowns(self):
+        window = self.dropdown_page
+        ttk.Label(window, text="DropDown", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        self.dropdown_names = {caption(name): name for name in DROPDOWN_FIELDS}
         fields = (
-            Field("FieldName", "choice", choices=tuple(names), default=next(iter(names))),
+            Field("FieldName", "choice", choices=tuple(self.dropdown_names),
+                  default=next(iter(self.dropdown_names))),
             Field("ListItem"),
         )
-        form = Form(window, fields)
-        form.pack(fill="x")
+        self.dropdown_form = Form(window, fields)
+        self.dropdown_form.pack(fill="x")
         ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
                   "add form. Defined grain, print and status choices cannot be extended.",
                   wraplength=720, padding=8).pack(anchor="w")
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
-        listing = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
-        listing.pack(fill="both", expand=True)
+        self.dropdown_list = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
+        self.dropdown_list.pack(fill="both", expand=True)
+        self.button(actions, "Add Item", self.add_dropdown)
+        self.button(actions, "Set Default", self.set_dropdown_default)
+        self.dropdown_form.widgets["FieldName"].bind(
+            "<<ComboboxSelected>>", self.command(self.refresh_dropdowns))
+        self.dropdown_initial = self.dropdown_form.values()
+        self.refresh_dropdowns()
 
-        def field_name():
-            return names[validate_fields(fields, form.values())["FieldName"]]
+    def dropdown_field(self):
+        values = validate_fields(self.dropdown_form.fields, self.dropdown_form.values())
+        return self.dropdown_names[values["FieldName"]]
 
-        def refresh():
-            name = field_name()
-            rows = self.db.dropdown_rows(name)
-            for row in rows:
-                row["FieldName"] = caption(row["FieldName"])
-            listing.fill(rows, "dropdown records", (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc")))
-            self.form.refresh_choices()
+    def refresh_dropdowns(self):
+        rows = self.db.dropdown_rows(self.dropdown_field())
+        for row in rows:
+            row["FieldName"] = caption(row["FieldName"])
+        self.dropdown_list.fill(
+            rows, "dropdown records", (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc")))
+        self.form.refresh_choices()
+        self.dropdown_initial["FieldName"] = self.dropdown_form.values()["FieldName"]
 
-        def add():
-            self.db.add_dropdown_item(field_name(), form.values()["ListItem"])
-            refresh()
+    def add_dropdown(self):
+        self.db.add_dropdown_item(self.dropdown_field(), self.dropdown_form.values()["ListItem"])
+        self.dropdown_form.variables["ListItem"].set("")
+        self.dropdown_initial = self.dropdown_form.values()
+        self.refresh_dropdowns()
 
-        def set_default():
-            selected = listing.tree.selection()
-            if len(selected) != 1:
-                raise FieldError("OneRecord", "Dropdown")
-            self.db.set_dropdown_default(int(selected[0]))
-            refresh()
+    def set_dropdown_default(self):
+        selected = self.dropdown_list.tree.selection()
+        if len(selected) != 1:
+            raise FieldError("OneRecord", "Dropdown")
+        self.db.set_dropdown_default(int(selected[0]))
+        self.refresh_dropdowns()
 
-        self.button(actions, "Add Item", add)
-        self.button(actions, "Set Default", set_default)
-        self.button(actions, "Close", window.destroy)
-        form.widgets["FieldName"].bind("<<ComboboxSelected>>", self.command(refresh))
-        refresh()
+    def build_helptext(self):
+        ttk.Label(self.help_page, text="HelpText", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        self.help_form = Form(self.help_page, HELP_FIELDS, columns=1)
+        self.help_form.pack(fill="x")
+        for name in ("TableName", "FieldName"):
+            self.help_form.widgets[name].configure(state="readonly")
+        actions = ttk.Frame(self.help_page, padding=8)
+        actions.pack(fill="x")
+        self.help_update = self.button(actions, "Update", self.update_help)
+        self.button(actions, "Clear", lambda: self.clear_help() if self.allow_navigation() else None)
+        self.help_list = RecordList(self.help_page, HELP_COLUMNS)
+        self.help_list.pack(fill="both", expand=True)
+        self.help_list.tree.configure(selectmode="browse")
+        self.help_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_help_select))
+        for name in HELP_COLUMNS:
+            self.help_list.tree.heading(name, command=self.command(lambda name=name: self.sort_help(name)))
+        self.clear_help()
+        self.refresh_help()
+
+    def clear_help(self):
+        self.help_id = None
+        self.help_selection = ()
+        self.help_list.tree.selection_remove(self.help_list.tree.selection())
+        self.help_form.defaults()
+        self.help_initial = self.help_form.values()
+        self.help_update.state(["disabled"])
+
+    def on_help_select(self):
+        selected = self.help_list.tree.selection()
+        if selected == self.help_selection:
+            return
+        if self.help_form.values() != self.help_initial and not self.allow_navigation():
+            self.help_list.tree.selection_set(self.help_selection)
+            return
+        if not selected:
+            self.clear_help()
+            return
+        row = next(row for row in self.help_rows if str(row["ID"]) == selected[0])
+        self.help_id = row["ID"]
+        self.help_selection = selected
+        self.help_form.assign({field.name: row[field.name] for field in HELP_FIELDS})
+        self.help_initial = self.help_form.values()
+        self.help_update.state(["!disabled"])
+
+    def refresh_help(self):
+        keep = self.help_id
+        self.help_rows = self.db.help_rows()
+        self.help_list.fill(self.help_rows, "help records", self.db.load_sort("HelpTextSort"))
+        self.help_selection = ()
+        if keep is not None:
+            self.help_list.tree.selection_set(str(keep))
+            self.on_help_select()
+
+    def update_help(self):
+        if self.help_id is None:
+            raise FieldError("OneRecord", "HelpText")
+        self.db.save_help(self.help_id, self.help_form.values(), self.help_initial)
+        self.help_initial = self.help_form.values()
+        self.refresh_help()
+
+    def sort_help(self, name):
+        if not self.allow_navigation():
+            return
+        order = self.db.load_sort("HelpTextSort")
+        direction = "desc" if order[0] == (name, "asc") else "asc"
+        self.db.save_sort(((name, direction),), "HelpTextSort")
+        self.help_form.assign(self.help_initial)
+        self.refresh_help()
 
     def open_sort(self):
-        window = self.dialog("Sort Fabric Inventory")
+        window = self.dialog("Sort Fabric Inventory", "Sort")
         fields = []
         for index in range(1, len(SORT_FIELDS) + 1):
             fields.extend((
@@ -491,6 +711,7 @@ class Application:
         for index, (name, direction) in enumerate(self.sort, 1):
             form.variables[f"SortField{index}"].set(caption(name))
             form.variables[f"Direction{index}"].set(direction)
+        self.watch_dialog(window, form)
 
         def apply():
             values = validate_fields(fields, form.values())
@@ -512,12 +733,13 @@ class Application:
         self.button(actions, "Cancel", window.destroy)
 
     def open_sets(self):
-        window = self.dialog("Set Selection")
+        window = self.dialog("Set Selection", "Set Selection")
         rows = self.db.sets()
         choices = {f"{row['SetName']} ({row['RecordCount']} records; ID {row['ID']})": row["ID"] for row in rows}
         fields = (Field("SavedSet", "choice", choices=("", *choices)), Field("SetName"))
         form = Form(window, fields, columns=1)
         form.pack(fill="x")
+        self.watch_dialog(window, form)
         ttk.Label(window, text=f"{len(self.rows)} records in the current working list. "
                   "Save Current saves all of them.", padding=8).pack(anchor="w")
 
@@ -561,7 +783,7 @@ class Application:
         if self.piece_id is None:
             raise FieldError("OneRecord", "Fabric Inventory")
         rows = self.db.history(self.piece_id)
-        window = self.dialog(f"Fabric Piece {self.piece_id} - History")
+        window = self.dialog(f"Fabric Piece {self.piece_id} - History", "History")
         window.geometry("950x600")
         listing = RecordList(window, ("ID", "Action", "DateCreated"))
         listing.pack(fill="both", expand=True)
@@ -571,6 +793,7 @@ class Application:
         scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
         scroll.pack(side="right", fill="y")
         text.configure(yscrollcommand=scroll.set)
+        self.attach_help(text, "HistoryValues")
 
         def show():
             selected = listing.tree.selection()
@@ -631,27 +854,24 @@ class Application:
                 parent=self.root,
             )
 
-    def screen_help(self):
-        messagebox.showinfo(
-            "Fabric Inventory Help",
-            "Each record is one usable fabric rectangle. Dimensions are in inches, excluding selvage "
-            "and damaged edges. Press F1 in a field for help.\n\n"
-            "Highlight one row to fill the form. Add creates a separate piece from these values; "
-            "Update changes the highlighted piece. Clear discards "
-            "details and starts a new piece. History shows saved changes. Retire a piece instead of "
-            "deleting it; record actual remaining dimensions when making an inventory correction.\n\n"
-            "Select Highlighted restricts the working list to highlighted rows. Filter applies text, "
-            "minimum-size and status criteria. Set Selection saves the whole working list, or recalls "
-            "a snapshot and clears other restrictions. Sort supports multiple fields. Reset Selection "
-            "shows all records, including retired ones. The initial view shows Available pieces.\n\n"
-            "Setup/Utilities contains Dropdown defaults, Backup Database and Restore Database. "
-            "Backup saves committed data to a new file. Restore creates a separate verified database "
-            "and never changes your open database. Keep the live database on a local disk; "
-            "coordinate restores and future upgrades with other users.\n\n"
-            "This first milestone does not yet generate cutting plans or track cuts and remnants.",
-            parent=self.root,
-        )
+    def show_help(self, screen, name):
+        _, full = self.db.help_pair(screen, name)
+        window = self.dialog(f"{screen} - {caption(name)}", "Screen Help")
+        window.geometry("800x520")
+        text = tk.Text(window, wrap="word", padx=12, pady=12)
+        text.pack(fill="both", expand=True)
+        scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
+        scroll.pack(side="right", fill="y")
+        text.configure(yscrollcommand=scroll.set)
+        text.insert("1.0", full)
+        text.configure(state="disabled")
+        self.attach_help(text, "HelpContent")
+        self.button(window, "Close", window.destroy)
+
+    def screen_help(self, parent=None):
+        parent = parent or self.root.grab_current() or self.root
+        self.show_help(self.context(parent), "ScreenHelp")
 
     def close(self):
-        if self.allow_discard():
+        if self.allow_navigation():
             self.root.destroy()

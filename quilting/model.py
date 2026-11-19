@@ -164,7 +164,7 @@ def validate_fields(fields, values):
     return result
 
 
-def normalize_sort(sort):
+def normalize_sort(sort, fields=SORT_FIELDS):
     if not isinstance(sort, (list, tuple)) or not sort:
         raise FieldError("Sort", "Sort")
     result = []
@@ -172,7 +172,7 @@ def normalize_sort(sort):
         if not isinstance(pair, (list, tuple)) or len(pair) != 2:
             raise FieldError("Sort", "Sort")
         field, direction = pair
-        if field not in SORT_FIELDS or direction not in ("asc", "desc"):
+        if field not in fields or direction not in ("asc", "desc"):
             raise FieldError("Sort", "Sort")
         if field in [item[0] for item in result]:
             raise FieldError("Sort", field)

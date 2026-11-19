@@ -7,13 +7,24 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .helptext import HELP_COLUMNS, HELP_FIELDS, default_help
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
-    Field, FieldError, caption, normalize_sort, validate_fields,
+    SORT_FIELDS, Field, FieldError, caption, normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+HELP_SCHEMA = """
+CREATE TABLE HelpText (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    TableName TEXT NOT NULL CHECK(length(trim(TableName)) BETWEEN 1 AND 120),
+    FieldName TEXT NOT NULL CHECK(length(trim(FieldName)) BETWEEN 1 AND 120),
+    HoverText TEXT NOT NULL CHECK(length(trim(HoverText)) BETWEEN 1 AND 4000),
+    FullText TEXT NOT NULL CHECK(length(trim(FullText)) BETWEEN 1 AND 16000),
+    UNIQUE(TableName, FieldName)
+);
+"""
 DROPDOWN_SCHEMA = """
 CREATE TABLE Dropdown (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +89,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-""" + DROPDOWN_SCHEMA
+""" + DROPDOWN_SCHEMA + HELP_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -87,6 +98,11 @@ TABLE_COLUMNS = {
     "ErrorText": ("ErrorTextID", "MessageKey", "Description", "MessageTemplate", "ResolutionText"),
     "ScreenState": ("ScreenName", "StateValues"),
     "Dropdown": ("ID", "TableName", "FieldName", "ListItem", "Def", "Use"),
+    "HelpText": HELP_COLUMNS,
+}
+SAVED_SORTS = {
+    "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
+    "HelpTextSort": (HELP_COLUMNS, (("TableName", "asc"), ("FieldName", "asc"), ("ID", "asc"))),
 }
 
 
@@ -120,12 +136,14 @@ class Database:
                     )
                     self._seed_dropdowns()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                  and self.connection.execute("PRAGMA user_version").fetchone()[0] == 1):
+                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
                 self._upgrade()
             self.validate(self.connection)
+            with self.connection:
+                self._seed_help()
         except (sqlite3.Error, OSError, FieldError):
             self.connection.close()
             raise
@@ -137,10 +155,12 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
+                or version not in ((1, 2, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
             if version == 1 and table == "Dropdown":
+                continue
+            if version < 3 and table == "HelpText":
                 continue
             columns = tuple(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
             if columns != expected:
@@ -163,23 +183,64 @@ class Database:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.validate(self.connection, allow_legacy=True)
-            if self.connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+            version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (1, 2):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
-            for statement in DROPDOWN_SCHEMA.split(";"):
+            schema = (DROPDOWN_SCHEMA if version == 1 else "") + HELP_SCHEMA
+            for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
-            self._seed_dropdowns()
-            message = next(message for message in MESSAGES if message[0] == "Measurement")
-            self.connection.execute(
-                "UPDATE ErrorText SET Description = ?, MessageTemplate = ?, ResolutionText = ? "
-                "WHERE MessageKey = ?", (*message[1:], message[0]),
-            )
+            if version == 1:
+                self._seed_dropdowns()
+                message = next(message for message in MESSAGES if message[0] == "Measurement")
+                self.connection.execute(
+                    "UPDATE ErrorText SET Description = ?, MessageTemplate = ?, ResolutionText = ? "
+                    "WHERE MessageKey = ?", (*message[1:], message[0]),
+                )
+            self._seed_help()
             self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self.validate(self.connection)
             self.connection.commit()
         except (sqlite3.Error, FieldError):
             self.connection.rollback()
             raise
+
+    def _seed_help(self):
+        self.connection.executemany(
+            "INSERT INTO HelpText (TableName, FieldName, HoverText, FullText) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(TableName, FieldName) DO NOTHING",
+            ((screen, name, *pair) for (screen, name), pair in default_help().items()),
+        )
+
+    def help_pair(self, screen, name):
+        row = self.connection.execute(
+            "SELECT HoverText, FullText FROM HelpText WHERE TableName = ? AND FieldName = ?",
+            (screen, name),
+        ).fetchone()
+        if row is None:
+            raise FieldError("DatabaseFormat", "HelpText", detail=f"Missing help for {screen}/{name}.")
+        return tuple(row)
+
+    def help_rows(self):
+        order = self.load_sort("HelpTextSort")
+        sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
+        return [dict(row) for row in self.connection.execute(f"SELECT * FROM HelpText ORDER BY {sql_order}")]
+
+    def save_help(self, help_id, values, previous):
+        clean = validate_fields(HELP_FIELDS, values)
+        with self.connection:
+            row = self.connection.execute("SELECT * FROM HelpText WHERE ID = ?", (help_id,)).fetchone()
+            if row is None:
+                raise FieldError("MissingRecord", "HelpText")
+            if any(clean[name] != row[name] for name in ("TableName", "FieldName")):
+                raise FieldError("Choice", "FieldName")
+            cursor = self.connection.execute(
+                "UPDATE HelpText SET HoverText = ?, FullText = ? WHERE ID = ? "
+                "AND HoverText = ? AND FullText = ?",
+                (clean["HoverText"], clean["FullText"], help_id, previous["HoverText"], previous["FullText"]),
+            )
+            if cursor.rowcount != 1:
+                raise FieldError("Conflict", "HelpText")
 
     def _seed_dropdowns(self):
         for name, field in DROPDOWN_FIELDS.items():
@@ -385,23 +446,25 @@ class Database:
             if cursor.rowcount != 1:
                 raise FieldError("MissingRecord", "SelectionSetID")
 
-    def save_sort(self, sort):
-        clean = normalize_sort(sort)
+    def save_sort(self, sort, screen="FabricInventorySort"):
+        fields, _ = SAVED_SORTS[screen]
+        clean = normalize_sort(sort, fields)
         with self.connection:
             self.connection.execute(
-                "INSERT INTO ScreenState VALUES ('FabricInventorySort', ?) "
+                "INSERT INTO ScreenState VALUES (?, ?) "
                 "ON CONFLICT(ScreenName) DO UPDATE SET StateValues = excluded.StateValues",
-                (json.dumps(clean),),
+                (screen, json.dumps(clean)),
             )
 
-    def load_sort(self):
+    def load_sort(self, screen="FabricInventorySort"):
+        fields, default = SAVED_SORTS[screen]
         row = self.connection.execute(
-            "SELECT StateValues FROM ScreenState WHERE ScreenName = 'FabricInventorySort'",
+            "SELECT StateValues FROM ScreenState WHERE ScreenName = ?", (screen,),
         ).fetchone()
         if row is None:
-            return DEFAULT_SORT
+            return default
         try:
-            return normalize_sort(json.loads(row[0]))
+            return normalize_sort(json.loads(row[0]), fields)
         except (ValueError, TypeError) as error:
             raise FieldError("DatabaseFormat", "Sort", detail=f"Saved sort is invalid: {error}") from error
 
