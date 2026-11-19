@@ -83,6 +83,8 @@ class HelpTextTests(unittest.TestCase):
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
+            for table in ("ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE HelpText")
             self.db.connection.execute("PRAGMA user_version = 2")
         tables = ("FabricPiece", "FabricHistory", "Dropdown", "ErrorText")

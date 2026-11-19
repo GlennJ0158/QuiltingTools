@@ -4,11 +4,15 @@ import json
 import sqlite3
 import traceback
 import tkinter as tk
+import webbrowser
 from datetime import datetime
+from html import escape
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION
 from .database import Database
+from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import HELP_COLUMNS, HELP_FIELDS, NAVIGATION
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
@@ -244,9 +248,10 @@ class Application:
         self.inventory_page = body
         self.dropdown_page = ttk.Frame(self.pages, padding=8)
         self.help_page = ttk.Frame(self.pages, padding=8)
+        self.error_page = ttk.Frame(self.pages, padding=8)
         self.setup_page = ttk.Frame(self.pages, padding=12)
         self.screens = {"Fabric": body, "DropDown": self.dropdown_page,
-                        "HelpText": self.help_page, "Setup": self.setup_page}
+                        "HelpText": self.help_page, "ErrorMessage": self.error_page, "Setup": self.setup_page}
         for name, page in self.screens.items():
             page.help_screen = name
         body.pack(fill="both", expand=True)
@@ -293,6 +298,7 @@ class Application:
         self.refresh()
         self.build_dropdowns()
         self.build_helptext()
+        self.build_errors()
 
     def context(self, widget):
         while widget is not None:
@@ -334,6 +340,8 @@ class Application:
             forms.append((self.dropdown_form, self.dropdown_initial))
         elif self.current == "HelpText":
             forms.append((self.help_form, self.help_initial))
+        elif self.current == "ErrorMessage":
+            forms.append((self.error_form, self.error_initial))
         forms.extend(self.dialog_forms.values())
         return any(form.values() != initial for form, initial in forms)
 
@@ -356,12 +364,15 @@ class Application:
         self.dropdown_form.variables["ListItem"].set("")
         self.dropdown_initial = self.dropdown_form.values()
         self.clear_help()
+        self.clear_error()
         if name == "Fabric":
             self.refresh()
         elif name == "DropDown":
             self.refresh_dropdowns()
         elif name == "HelpText":
             self.refresh_help()
+        elif name == "ErrorMessage":
+            self.refresh_errors()
         self.screens[self.current].pack_forget()
         self.current = name
         self.screens[name].pack(fill="both", expand=True)
@@ -535,21 +546,27 @@ class Application:
         self.dialog_forms[window] = form, form.values()
 
     def open_filter(self):
-        window = self.dialog("Filter Fabric Inventory", "Filter")
-        form = Form(window, FILTER_FIELDS, columns=1)
+        errors = self.current == "ErrorMessage"
+        fields = ERROR_FILTER_FIELDS if errors else FILTER_FIELDS
+        window = self.dialog("Filter Error Messages" if errors else "Filter Fabric Inventory",
+                             "Error Filter" if errors else "Filter")
+        form = Form(window, fields, columns=1)
         form.pack(fill="both", expand=True)
-        form.assign(self.filters)
+        form.assign(self.error_filters if errors else self.filters)
         self.watch_dialog(window, form)
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
 
         def apply():
             values = form.values()
-            validate_fields(FILTER_FIELDS, values)
-            if self.allow_discard():
-                self.filters = values
+            validate_fields(fields, values)
+            if (self.allow_error_discard if errors else self.allow_discard)():
+                if errors:
+                    self.error_filters = values
+                else:
+                    self.filters = values
                 window.destroy()
-                self.refresh()
+                (self.refresh_errors if errors else self.refresh)()
 
         self.button(actions, "Apply", apply)
         self.button(actions, "Clear Fields", form.defaults)
@@ -697,18 +714,189 @@ class Application:
         self.help_form.assign(self.help_initial)
         self.refresh_help()
 
+    def build_errors(self):
+        self.error_filters = {field.name: "" for field in ERROR_FILTER_FIELDS}
+        self.error_selected_ids = None
+        self.error_selection_description = ""
+        self.error_sort = self.db.load_sort("ErrorMessageSort")
+        ttk.Label(self.error_page, text="ErrorMessage - Troubleshooting Reference",
+                  font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        ttk.Label(self.error_page, text="Reference edits do not change runtime error dialogs. "
+                  "Numbered fixes correspond to numbered likely causes; braces mark variable details.",
+                  wraplength=1100).pack(anchor="w")
+        self.error_form = Form(self.error_page, ERROR_FIELDS, columns=1, style="Entry.TFrame")
+        self.error_form.pack(fill="x")
+        self.error_details = ttk.Label(self.error_page, padding=4)
+        self.error_details.pack(anchor="w")
+        actions = ttk.Frame(self.error_page, padding=8)
+        actions.pack(fill="x")
+        self.button(actions, "Add", self.add_error)
+        self.error_update = self.button(actions, "Update", self.update_error)
+        self.error_delete = self.button(actions, "Delete", self.delete_error)
+        self.button(actions, "Clear", self.clear_error_entry)
+        tools = ttk.Frame(self.error_page, padding=(8, 0))
+        tools.pack(fill="x")
+        for label, action in (
+            ("Select Highlighted", self.select_errors), ("Filter", self.open_filter),
+            ("Set", self.open_sets), ("Sort", self.open_sort),
+            ("Reset Selection", self.reset_errors), ("Refresh", self.refresh_error_view),
+            ("Print", self.print_errors),
+        ):
+            self.button(tools, label, action)
+        self.error_list = RecordList(self.error_page, ERROR_COLUMNS)
+        self.error_list.pack(fill="both", expand=True)
+        self.error_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_error_select))
+        self.clear_error()
+        self.refresh_errors()
+
+    def allow_error_discard(self):
+        return self.error_form.values() == self.error_initial or messagebox.askyesno(
+            "Unsaved Changes", "Discard unsaved error-message details?",
+            parent=self.root.grab_current() or self.root,
+        )
+
+    def clear_error(self):
+        self.error_id = None
+        self.error_selection = ()
+        self.error_list.tree.selection_remove(self.error_list.tree.selection())
+        self.error_form.defaults()
+        self.error_initial = self.error_form.values()
+        self.error_details.configure(text="New error message")
+        self.error_update.state(["disabled"])
+        self.error_delete.state(["disabled"])
+
+    def clear_error_entry(self):
+        if self.allow_error_discard():
+            self.clear_error()
+
+    def on_error_select(self):
+        selected = self.error_list.tree.selection()
+        if selected == self.error_selection:
+            return
+        if not self.allow_error_discard():
+            self.error_list.tree.selection_set(self.error_selection)
+            return
+        if len(selected) != 1:
+            self.clear_error()
+            self.error_list.tree.selection_set(selected)
+            self.error_selection = selected
+            return
+        row = self.db.get_error(int(selected[0]))
+        self.error_id = row["ID"]
+        self.error_selection = selected
+        self.error_form.assign({field.name: row[field.name] for field in ERROR_FIELDS})
+        self.error_initial = self.error_form.values()
+        self.error_details.configure(text=f"ID: {self.error_id}")
+        self.error_update.state(["!disabled"])
+        self.error_delete.state(["!disabled"])
+
+    def refresh_errors(self, prefer_id=None):
+        self.error_rows = self.db.error_rows(
+            self.error_filters, self.error_selected_ids, self.error_sort,
+        )
+        context = f"; {self.error_selection_description}" if self.error_selection_description else ""
+        filters = [f"{caption(name)}={value}" for name, value in self.error_filters.items() if value]
+        if filters:
+            context += "; Filter: " + ", ".join(filters)
+        self.clear_error()
+        self.error_list.fill(self.error_rows, "error messages", self.error_sort, context)
+        if prefer_id is not None and self.error_list.tree.exists(str(prefer_id)):
+            self.error_list.tree.selection_set(str(prefer_id))
+            self.error_list.tree.see(str(prefer_id))
+            self.on_error_select()
+        elif prefer_id is not None:
+            self.error_details.configure(text=f"Saved message {prefer_id} (outside the current working selection)")
+
+    def refresh_error_view(self):
+        if self.allow_error_discard():
+            self.refresh_errors()
+
+    def add_error(self):
+        message_id = self.db.save_error(self.error_form.values())
+        self.refresh_errors(message_id)
+
+    def require_error(self):
+        if self.error_id is None or self.error_list.tree.selection() != (str(self.error_id),):
+            raise FieldError("OneRecord", "ErrorMessage")
+        return self.error_id
+
+    def update_error(self):
+        message_id = self.require_error()
+        self.db.save_error(self.error_form.values(), message_id, self.error_initial)
+        self.refresh_errors(message_id)
+
+    def delete_error(self):
+        message_id = self.require_error()
+        if not self.allow_error_discard():
+            return
+        if messagebox.askyesno("Delete Error Message",
+                              f"Delete reference message {message_id}? Runtime error dialogs are unchanged.",
+                              parent=self.root):
+            self.db.delete_error(message_id, self.error_initial)
+            self.refresh_errors()
+
+    def select_errors(self):
+        ids = [int(item) for item in self.error_list.tree.selection()]
+        if not ids:
+            raise FieldError("NoHighlight", "ErrorMessage")
+        if self.allow_error_discard():
+            self.error_selected_ids = ids
+            self.error_selection_description = "Highlighted-record restriction"
+            self.refresh_errors()
+
+    def reset_errors(self):
+        if self.allow_error_discard():
+            self.error_filters = {field.name: "" for field in ERROR_FILTER_FIELDS}
+            self.error_selected_ids = None
+            self.error_selection_description = ""
+            self.refresh_errors()
+
+    def print_errors(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Save Error Message Print Report (new file only)", defaultextension=".html",
+            initialfile="ErrorMessages.html", filetypes=(("HTML report", "*.html"),),
+        )
+        if not destination:
+            return
+        # Snapshot displayed values, not a fresh database query or just the highlights.
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{escape(str(value))}</td>" for value in self.error_list.tree.item(item, "values"))
+            + "</tr>" for item in self.error_list.tree.get_children()
+        )
+        headings = "".join(f"<th>{escape(caption(name))}</th>" for name in ERROR_COLUMNS)
+        report = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>Error Messages</title>'
+            "<style>body{font-family:sans-serif}table{border-collapse:collapse;width:100%}"
+            "th,td{border:1px solid #888;padding:6px;text-align:left;vertical-align:top}"
+            "td{white-space:pre-wrap;overflow-wrap:anywhere}thead{display:table-header-group}"
+            "@media print{button{display:none}}</style></head><body>"
+            '<h1>Error Messages</h1><p>' + escape(self.error_list.heading.cget("text"))
+            + '</p><button onclick="window.print()">Print</button>'
+            f"<table><thead><tr>{headings}</tr></thead><tbody>{rows}</tbody></table>"
+            '<script>window.addEventListener("load",()=>window.print());</script></body></html>'
+        )
+        path = Path(destination).resolve()
+        with path.open("x", encoding="utf-8") as output:
+            output.write(report)
+        if not webbrowser.open(path.as_uri()):
+            raise FieldError("Database", "Print",
+                             detail=f"No browser opened. Open {path} manually and choose Print.")
+
     def open_sort(self):
-        window = self.dialog("Sort Fabric Inventory", "Sort")
+        errors = self.current == "ErrorMessage"
+        columns = ERROR_COLUMNS if errors else SORT_FIELDS
+        window = self.dialog("Sort Error Messages" if errors else "Sort Fabric Inventory",
+                             "Error Sort" if errors else "Sort")
         fields = []
-        for index in range(1, len(SORT_FIELDS) + 1):
+        for index in range(1, len(columns) + 1):
             fields.extend((
-                Field(f"SortField{index}", "choice", choices=("", *map(caption, SORT_FIELDS))),
+                Field(f"SortField{index}", "choice", choices=("", *map(caption, columns))),
                 Field(f"Direction{index}", "choice", choices=("asc", "desc"), default="asc"),
             ))
         form = Form(window, fields)
         form.pack(fill="both", expand=True)
-        lookup = {caption(name): name for name in SORT_FIELDS}
-        for index, (name, direction) in enumerate(self.sort, 1):
+        lookup = {caption(name): name for name in columns}
+        for index, (name, direction) in enumerate(self.error_sort if errors else self.sort, 1):
             form.variables[f"SortField{index}"].set(caption(name))
             form.variables[f"Direction{index}"].set(direction)
         self.watch_dialog(window, form)
@@ -717,14 +905,17 @@ class Application:
             values = validate_fields(fields, form.values())
             requested = [
                 (lookup[values[f"SortField{index}"]], values[f"Direction{index}"])
-                for index in range(1, len(SORT_FIELDS) + 1) if values[f"SortField{index}"]
+                for index in range(1, len(columns) + 1) if values[f"SortField{index}"]
             ]
-            order = normalize_sort(requested)
-            if self.allow_discard():
-                self.db.save_sort(order)
-                self.sort = order
+            order = normalize_sort(requested, columns)
+            if (self.allow_error_discard if errors else self.allow_discard)():
+                self.db.save_sort(order, "ErrorMessageSort" if errors else "FabricInventorySort")
+                if errors:
+                    self.error_sort = order
+                else:
+                    self.sort = order
                 window.destroy()
-                self.refresh()
+                (self.refresh_errors if errors else self.refresh)()
 
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
@@ -733,14 +924,17 @@ class Application:
         self.button(actions, "Cancel", window.destroy)
 
     def open_sets(self):
-        window = self.dialog("Set Selection", "Set Selection")
-        rows = self.db.sets()
+        errors = self.current == "ErrorMessage"
+        screen = "ErrorMessage" if errors else "Fabric"
+        window = self.dialog("Error Message Sets" if errors else "Set Selection",
+                             "Error Set" if errors else "Set Selection")
+        rows = self.db.sets(screen)
         choices = {f"{row['SetName']} ({row['RecordCount']} records; ID {row['ID']})": row["ID"] for row in rows}
         fields = (Field("SavedSet", "choice", choices=("", *choices)), Field("SetName"))
         form = Form(window, fields, columns=1)
         form.pack(fill="x")
         self.watch_dialog(window, form)
-        ttk.Label(window, text=f"{len(self.rows)} records in the current working list. "
+        ttk.Label(window, text=f"{len(self.error_rows if errors else self.rows)} records in the current working list. "
                   "Save Current saves all of them.", padding=8).pack(anchor="w")
 
         def chosen():
@@ -750,27 +944,34 @@ class Application:
             return choices[values["SavedSet"]]
 
         def save():
-            self.db.save_set(form.values()["SetName"], [row["ID"] for row in self.rows])
+            self.db.save_set(form.values()["SetName"],
+                             [row["ID"] for row in (self.error_rows if errors else self.rows)], screen)
             window.destroy()
-            self.status.configure(text="Saved selection set.")
+            (self.error_details if errors else self.status).configure(text="Saved selection set.")
 
         def apply():
             set_id = chosen()
-            ids = self.db.set_members(set_id)
-            if self.allow_discard():
-                self.filters = {field.name: "" for field in FILTER_FIELDS}
-                self.selected_ids = ids
-                self.selection_description = f"Selection set ID {set_id}"
+            ids = self.db.set_members(set_id, screen)
+            if (self.allow_error_discard if errors else self.allow_discard)():
+                if errors:
+                    self.error_filters = {field.name: "" for field in ERROR_FILTER_FIELDS}
+                    self.error_selected_ids = ids
+                    self.error_selection_description = f"Selection set ID {set_id}"
+                else:
+                    self.filters = {field.name: "" for field in FILTER_FIELDS}
+                    self.selected_ids = ids
+                    self.selection_description = f"Selection set ID {set_id}"
                 window.destroy()
-                self.refresh()
+                (self.refresh_errors if errors else self.refresh)()
 
         def delete():
             set_id = chosen()
-            if messagebox.askyesno("Delete Selection Set", "Delete this set? Fabric records are kept.",
+            if messagebox.askyesno("Delete Selection Set", "Delete this set? Source records are kept.",
                                    parent=window):
-                self.db.delete_set(set_id)
+                self.db.delete_set(set_id, screen)
                 window.destroy()
-                self.status.configure(text="Deleted selection set. The current working list is unchanged.")
+                (self.error_details if errors else self.status).configure(
+                    text="Deleted selection set. The current working list is unchanged.")
 
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")

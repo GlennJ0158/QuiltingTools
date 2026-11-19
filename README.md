@@ -16,8 +16,8 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases from versions 0.1 and 0.2 prompt for a backed-up upgrade
-to add HelpText (and Dropdown for version 0.1); declining leaves the database
+automatically. Databases from versions 0.1 through 0.3 prompt for a backed-up upgrade
+to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1); declining leaves the database
 unchanged. Close all other copies
 of the application before accepting. A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
@@ -28,7 +28,7 @@ Tkinter must be available in the Python installation.
 ### Navigation and help
 
 Every application screen and workflow window has the same top-right navigation:
-**Fabric / DropDown / HelpText / Setup / Screen Help**.
+**Fabric / DropDown / HelpText / ErrorMessage / Setup / Screen Help**.
 Switching screens closes unfinished dialogs, releases their modal grabs, and
 resets unsaved entry forms before showing the destination. Unsaved input requires
 confirmation; declining keeps the current screen, input and dialog intact.
@@ -53,8 +53,52 @@ Text is plain text, not rich text.
 
 Click a HelpText column heading to toggle ascending/descending order. Its sort
 is saved separately from Fabric in the existing `ScreenState` table; no separate
-sort table is added. Existing `ErrorText` functionality is unchanged and further
-error-text maintenance is outside this change.
+sort table is added. Existing runtime `ErrorText` functionality is unchanged.
+
+### Error-message reference
+
+**ErrorMessage** provides a blue entry area and a list for adding, updating and
+deleting troubleshooting messages. Its table contains generated **ID**, **ErrorText**,
+**LikelyCause** and **Description** columns. All three text fields are required;
+Error Text and Likely Cause allow 4,000 characters, Description 16,000. Highlight
+one row to edit it; Add creates a separate entry, Update changes that entry, and
+Delete requires confirmation. Stale updates/deletions are rejected. Navigation,
+highlight changes and list changes protect unsaved input with confirmation.
+
+New databases and upgrades populate the reference from every existing runtime
+message template, plus startup and error-catalog failure templates. Initial runtime
+reference IDs match the runtime Error IDs. Later reference additions have independent
+IDs. Numbered likely causes have corresponding numbered fixes in Description.
+Braced placeholders such as `{detail}` and `{limit}` represent variable values,
+not literal complete error messages. System/SQLite exception details are represented
+by their enclosing template; arbitrary OS-specific strings are not enumerated.
+Startup messages may not have runtime Error IDs.
+
+The toolbar is **Select Highlighted / Filter / Set / Sort**, followed by Reset
+Selection, Refresh and Print. Filter searches Error Text, Likely Cause and
+Description using literal text-contains matching, ignoring ASCII case. Multiple
+nonblank criteria are ANDed, including any existing highlighted-row restriction.
+Set saves all listed IDs as a named snapshot, not just highlights. Applying a set
+clears other restrictions. Message sets and saved multi-column sorts are separate
+from Fabric's. ID sorts numerically and is added to break sort ties. Deleting a
+message also removes its saved-set memberships; deleting a set keeps its messages.
+List restrictions persist during navigation, but reset on restart; sets and sorts
+persist in SQLite.
+
+**Print** saves an HTML report at a **new filename** and opens the default browser's
+print dialog. The report contains exactly the listed messages, including all
+three text fields, in their current sort order, regardless of highlights. It
+excludes unsaved entry edits and changes not yet refreshed into the list. An empty
+list prints headings only. Use browser printing to select a printer or save to PDF.
+If the browser cannot open, the report remains available to open and print manually.
+Existing files are never overwritten.
+
+**Scope:** this is an editable troubleshooting reference, not a rewrite of runtime
+error handling. The existing `ErrorText` table still supplies actual error dialogs;
+editing or deleting reference entries cannot disable them. Reference defaults are
+populated once, so edits and deletions survive restart. Backup/restore includes
+messages, message sets and sort settings. No inventory behavior, logging system,
+error history, printer drivers, or other report types are added.
 
 ### Fabric rectangles
 
@@ -190,6 +234,7 @@ Tkinter callback failures display an error and write a traceback to stderr.
 definitions and exact measurements; `quilting/database.py` owns persistence,
 history, selections and backup/restore; `quilting/helptext.py` defines the default
 help catalog; `quilting/ui.py` owns screen behavior and shared form/list controls.
+`quilting/errors.py` defines error-reference fields and default causes/fixes.
 All persistent application information is in
 SQLite; the source code defines supported validation rules and schema.
 
@@ -205,7 +250,7 @@ The integrated roadmap remains:
    one Flying Geese method. Produce block, batch and whole-quilt cutting lists,
    per-block assembly lists and block-type counts.
 
-Cutting plans, remnant transactions, reservations, print reports, general
+Cutting plans, remnant transactions, reservations, inventory/cutting print reports, general
 geometry editing, metric measurements and automatic waste optimization are
 **not** implemented yet. Future block/layout calculation should stay separate
 from the UI and inventory persistence. Do not copy filament-specific stock
@@ -226,7 +271,9 @@ field bindings and round-trips, list alignment and button order, selection,
 filtering, saved sets, numeric sorting, unsaved edits, duplication from a highlighted
 record, compact left-aligned entries, dropdown defaults, minute-level timestamps,
 retirement, navigation alignment and cleanup, nested modal help, complete
-control-help bindings, live help edits and independent HelpText sorting.
+control-help bindings, live help edits, independent HelpText sorting, error-message
+maintenance/list operations and escaped, ordered print-report snapshots.
 Database tests cover validation, exact dimensions, stale updates, transaction
 rollback, history, persistence, error messages, dropdown normalization,
-backed-up upgrades/rollback, HelpText validation and preservation, and backup/restore.
+backed-up upgrades/rollback, HelpText validation and preservation, error-reference
+CRUD/conflicts, literal searches, isolated selection sets, and backup/restore.

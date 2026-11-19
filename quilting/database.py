@@ -8,13 +8,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .helptext import HELP_COLUMNS, HELP_FIELDS, default_help
+from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
     SORT_FIELDS, Field, FieldError, caption, normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+ERROR_SCHEMA = """
+CREATE TABLE ErrorMessage (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    ErrorText TEXT NOT NULL CHECK(length(trim(ErrorText)) BETWEEN 1 AND 4000),
+    LikelyCause TEXT NOT NULL CHECK(length(trim(LikelyCause)) BETWEEN 1 AND 4000),
+    Description TEXT NOT NULL CHECK(length(trim(Description)) BETWEEN 1 AND 16000)
+);
+CREATE TABLE ErrorMessageSet (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    SetName TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(trim(SetName)) BETWEEN 1 AND 120),
+    DateCreated TEXT NOT NULL
+);
+CREATE TABLE ErrorMessageMember (
+    SelectionSetID INTEGER NOT NULL REFERENCES ErrorMessageSet(ID) ON DELETE CASCADE,
+    ErrorMessageID INTEGER NOT NULL REFERENCES ErrorMessage(ID) ON DELETE CASCADE,
+    PRIMARY KEY (SelectionSetID, ErrorMessageID)
+);
+"""
 HELP_SCHEMA = """
 CREATE TABLE HelpText (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +108,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-""" + DROPDOWN_SCHEMA + HELP_SCHEMA
+""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -99,10 +118,18 @@ TABLE_COLUMNS = {
     "ScreenState": ("ScreenName", "StateValues"),
     "Dropdown": ("ID", "TableName", "FieldName", "ListItem", "Def", "Use"),
     "HelpText": HELP_COLUMNS,
+    "ErrorMessage": ERROR_COLUMNS,
+    "ErrorMessageSet": ("ID", "SetName", "DateCreated"),
+    "ErrorMessageMember": ("SelectionSetID", "ErrorMessageID"),
 }
 SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
     "HelpTextSort": (HELP_COLUMNS, (("TableName", "asc"), ("FieldName", "asc"), ("ID", "asc"))),
+    "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
+}
+SELECTION_TABLES = {
+    "Fabric": ("SelectionSet", "SelectionMember", "FabricPieceID"),
+    "ErrorMessage": ("ErrorMessageSet", "ErrorMessageMember", "ErrorMessageID"),
 }
 
 
@@ -135,8 +162,9 @@ class Database:
                         "VALUES (?, ?, ?, ?)", MESSAGES,
                     )
                     self._seed_dropdowns()
+                    self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2)):
+                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -155,9 +183,11 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
+                or version not in ((1, 2, 3, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version < 4 and table in ("ErrorMessage", "ErrorMessageSet", "ErrorMessageMember"):
+                continue
             if version == 1 and table == "Dropdown":
                 continue
             if version < 3 and table == "HelpText":
@@ -184,9 +214,10 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2):
+            if version not in (1, 2, 3):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
-            schema = (DROPDOWN_SCHEMA if version == 1 else "") + HELP_SCHEMA
+            schema = ((DROPDOWN_SCHEMA if version == 1 else "")
+                      + (HELP_SCHEMA if version < 3 else "") + ERROR_SCHEMA)
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
@@ -198,6 +229,7 @@ class Database:
                     "WHERE MessageKey = ?", (*message[1:], message[0]),
                 )
             self._seed_help()
+            self._seed_errors()
             self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self.validate(self.connection)
             self.connection.commit()
@@ -211,6 +243,77 @@ class Database:
             "ON CONFLICT(TableName, FieldName) DO NOTHING",
             ((screen, name, *pair) for (screen, name), pair in default_help().items()),
         )
+
+    def _seed_errors(self):
+        for row in self.connection.execute("SELECT * FROM ErrorText ORDER BY ErrorTextID").fetchall():
+            causes, fixes = TROUBLESHOOTING.get(
+                row["MessageKey"], (row["Description"], row["ResolutionText"]),
+            )
+            self.connection.execute(
+                "INSERT INTO ErrorMessage (ID, ErrorText, LikelyCause, Description) VALUES (?, ?, ?, ?)",
+                (row["ErrorTextID"], row["MessageTemplate"], causes, fixes),
+            )
+        self.connection.executemany(
+            "INSERT INTO ErrorMessage (ErrorText, LikelyCause, Description) VALUES (?, ?, ?)",
+            STARTUP_MESSAGES,
+        )
+
+    def error_rows(self, filters=None, selected_ids=None, sort=None):
+        values = {field.name: "" for field in ERROR_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(ERROR_FILTER_FIELDS, values)
+        order = self.load_sort("ErrorMessageSort") if sort is None else normalize_sort(sort, ERROR_COLUMNS)
+        clauses, args = [], []
+        for name, value in clean.items():
+            if value:
+                clauses.append(f'instr(lower("{name}"), lower(?)) > 0')
+                args.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
+        rows = [dict(row) for row in self.connection.execute(
+            f"SELECT * FROM ErrorMessage{where} ORDER BY {sql_order}", args,
+        )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
+
+    def get_error(self, message_id):
+        row = self.connection.execute("SELECT * FROM ErrorMessage WHERE ID = ?", (message_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "ErrorMessage")
+        return dict(row)
+
+    def save_error(self, values, message_id=None, previous=None):
+        clean = validate_fields(ERROR_FIELDS, values)
+        if message_id is not None:
+            previous = validate_fields(ERROR_FIELDS, previous if previous is not None else {})
+        with self.connection:
+            if message_id is None:
+                return self.connection.execute(
+                    "INSERT INTO ErrorMessage (ErrorText, LikelyCause, Description) VALUES (?, ?, ?)",
+                    tuple(clean.values()),
+                ).lastrowid
+            self.get_error(message_id)
+            cursor = self.connection.execute(
+                "UPDATE ErrorMessage SET ErrorText = ?, LikelyCause = ?, Description = ? "
+                "WHERE ID = ? AND ErrorText = ? AND LikelyCause = ? AND Description = ?",
+                (*clean.values(), message_id, *(previous[field.name] for field in ERROR_FIELDS)),
+            )
+            if cursor.rowcount != 1:
+                raise FieldError("Conflict", "ErrorMessage")
+        return message_id
+
+    def delete_error(self, message_id, previous):
+        previous = validate_fields(ERROR_FIELDS, previous)
+        with self.connection:
+            self.get_error(message_id)
+            cursor = self.connection.execute(
+                "DELETE FROM ErrorMessage WHERE ID = ? AND ErrorText = ? AND LikelyCause = ? "
+                "AND Description = ?",
+                (message_id, *(previous[field.name] for field in ERROR_FIELDS)),
+            )
+            if cursor.rowcount != 1:
+                raise FieldError("Conflict", "ErrorMessage")
 
     def help_pair(self, screen, name):
         row = self.connection.execute(
@@ -405,44 +508,48 @@ class Database:
             "SELECT * FROM FabricHistory WHERE FabricPieceID = ? ORDER BY ID DESC", (piece_id,),
         )]
 
-    def save_set(self, name, ids):
+    def save_set(self, name, ids, screen="Fabric"):
+        table, members, column = SELECTION_TABLES[screen]
         name = validate_fields((Field("SetName", required=True),), {"SetName": name})["SetName"]
         ids = sorted(set(ids))
         if not ids:
             raise FieldError("EmptySet", "SetName")
         with self.connection:
             if self.connection.execute(
-                    "SELECT 1 FROM SelectionSet WHERE SetName = ? COLLATE NOCASE", (name,)).fetchone():
+                    f"SELECT 1 FROM {table} WHERE SetName = ? COLLATE NOCASE", (name,)).fetchone():
                 raise FieldError("DuplicateSet", "SetName")
-            for piece_id in ids:
-                self.get_piece(piece_id)
+            for record_id in ids:
+                (self.get_piece if screen == "Fabric" else self.get_error)(record_id)
             cursor = self.connection.execute(
-                "INSERT INTO SelectionSet (SetName, DateCreated) VALUES (?, ?)", (name, now()),
+                f"INSERT INTO {table} (SetName, DateCreated) VALUES (?, ?)", (name, now()),
             )
             self.connection.executemany(
-                "INSERT INTO SelectionMember (SelectionSetID, FabricPieceID) VALUES (?, ?)",
+                f"INSERT INTO {members} (SelectionSetID, {column}) VALUES (?, ?)",
                 ((cursor.lastrowid, piece_id) for piece_id in ids),
             )
             return cursor.lastrowid
 
-    def sets(self):
+    def sets(self, screen="Fabric"):
+        table, members, column = SELECTION_TABLES[screen]
         return [dict(row) for row in self.connection.execute(
-            "SELECT s.ID, s.SetName, count(m.FabricPieceID) AS RecordCount "
-            "FROM SelectionSet s LEFT JOIN SelectionMember m ON s.ID = m.SelectionSetID "
+            f"SELECT s.ID, s.SetName, count(m.{column}) AS RecordCount "
+            f"FROM {table} s LEFT JOIN {members} m ON s.ID = m.SelectionSetID "
             "GROUP BY s.ID ORDER BY s.SetName COLLATE NOCASE, s.ID",
         )]
 
-    def set_members(self, set_id):
-        if self.connection.execute("SELECT 1 FROM SelectionSet WHERE ID = ?", (set_id,)).fetchone() is None:
+    def set_members(self, set_id, screen="Fabric"):
+        table, members, column = SELECTION_TABLES[screen]
+        if self.connection.execute(f"SELECT 1 FROM {table} WHERE ID = ?", (set_id,)).fetchone() is None:
             raise FieldError("MissingRecord", "SelectionSetID")
         return [row[0] for row in self.connection.execute(
-            "SELECT FabricPieceID FROM SelectionMember WHERE SelectionSetID = ? ORDER BY FabricPieceID",
+            f"SELECT {column} FROM {members} WHERE SelectionSetID = ? ORDER BY {column}",
             (set_id,),
         )]
 
-    def delete_set(self, set_id):
+    def delete_set(self, set_id, screen="Fabric"):
+        table, _, _ = SELECTION_TABLES[screen]
         with self.connection:
-            cursor = self.connection.execute("DELETE FROM SelectionSet WHERE ID = ?", (set_id,))
+            cursor = self.connection.execute(f"DELETE FROM {table} WHERE ID = ?", (set_id,))
             if cursor.rowcount != 1:
                 raise FieldError("MissingRecord", "SelectionSetID")
 

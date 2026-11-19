@@ -3,6 +3,7 @@ import tempfile
 import tkinter as tk
 import unittest
 from pathlib import Path
+from html.parser import HTMLParser
 from unittest.mock import patch
 from tkinter import ttk
 
@@ -13,6 +14,27 @@ from quilting.model import (
 )
 from quilting.ui import Application, Form, RecordList, display_timestamp
 from tests.test_inventory import fabric
+from tests.test_errors import error_values
+
+
+class ReportCells(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.cells = []
+        self.in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "td":
+            self.in_cell = True
+            self.cells.append("")
+
+    def handle_endtag(self, tag):
+        if tag == "td":
+            self.in_cell = False
+
+    def handle_data(self, data):
+        if self.in_cell:
+            self.cells[-1] += data
 
 
 def descendants(parent):
@@ -477,6 +499,172 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.dropdown_form.values()["ListItem"], "")
         self.assertNotIn("Uncommitted choice", self.db.dropdown_choices("FabricName"))
         self.errors.assert_not_called()
+
+    def test_error_entry_add_update_delete_and_unsaved_navigation(self):
+        self.app.show_screen("ErrorMessage")
+        self.app.error_form.assign(error_values())
+        self.click(self.app.error_page, "Add")
+        message_id = self.app.error_id
+        self.assertIsNotNone(message_id)
+        self.app.error_form.variables["Description"].set("1. New fix\nSecond line.")
+        self.click(self.app.error_page, "Update")
+        self.assertEqual(self.db.get_error(message_id)["Description"], "1. New fix\nSecond line.")
+        self.app.error_form.variables["LikelyCause"].set("Draft cause")
+        self.confirm.return_value = False
+        self.app.nav.buttons["Fabric"].invoke()
+        self.assertEqual(self.app.current, "ErrorMessage")
+        self.assertEqual(self.app.error_form.values()["LikelyCause"], "Draft cause")
+        self.click(self.app.error_page, "Clear")
+        self.assertEqual(self.app.error_id, message_id)
+        self.confirm.return_value = True
+        self.app.nav.buttons["Fabric"].invoke()
+        self.assertEqual(self.app.error_form.values()["LikelyCause"], "")
+        self.app.nav.buttons["ErrorMessage"].invoke()
+        self.app.error_list.tree.selection_set(str(message_id))
+        self.root.update()
+        self.confirm.return_value = False
+        self.click(self.app.error_page, "Delete")
+        self.assertEqual(self.db.get_error(message_id)["ID"], message_id)
+        self.confirm.return_value = True
+        self.click(self.app.error_page, "Delete")
+        with self.assertRaises(FieldError):
+            self.db.get_error(message_id)
+        self.assertIn("Error ID:", self.db.error_message(FieldError("Required", "ErrorText")))
+        self.errors.assert_not_called()
+
+    def test_error_filters_highlights_sets_sort_and_help_are_independent(self):
+        first = self.db.save_error(error_values(ErrorText="100% cotton", Description="A"))
+        second = self.db.save_error(error_values(ErrorText="100% cotton", Description="Z"))
+        self.app.show_screen("ErrorMessage")
+        buttons = [widget.cget("text") for widget in descendants(self.app.error_page)
+                   if isinstance(widget, ttk.Button)]
+        start = buttons.index("Select Highlighted")
+        self.assertEqual(buttons[start:start + 4], ["Select Highlighted", "Filter", "Set", "Sort"])
+        self.click(self.app.error_page, "Filter")
+        window = self.app.dialogs[-1]
+        self.assertTrue(all(self.db.help_pair("Error Filter", "ScreenHelp")))
+        self.app.dialog_forms[window][0].variables["ErrorText"].set("100% COTTON")
+        self.click(window, "Apply")
+        self.assertEqual(self.app.error_list.tree.get_children(), (str(first), str(second)))
+        self.click(self.app.error_page, "Sort")
+        window = self.app.dialogs[-1]
+        self.assertTrue(all(self.db.help_pair("Error Sort", "ScreenHelp")))
+        form = self.app.dialog_forms[window][0]
+        form.defaults()
+        form.variables["SortField1"].set("Description")
+        form.variables["Direction1"].set("desc")
+        self.click(window, "Apply")
+        self.assertEqual(self.app.error_list.tree.get_children(), (str(second), str(first)))
+        self.assertEqual(self.db.load_sort("ErrorMessageSort"), (("Description", "desc"), ("ID", "asc")))
+        self.assertEqual(self.db.load_sort(), self.app.sort)
+        self.click(self.app.error_page, "Set")
+        window = self.app.dialogs[-1]
+        self.assertTrue(all(self.db.help_pair("Error Set", "ScreenHelp")))
+        form = self.app.dialog_forms[window][0]
+        form.variables["SetName"].set("Cotton errors")
+        self.click(window, "Save Current")
+        self.app.error_list.tree.selection_set(str(second))
+        self.root.update()
+        self.click(self.app.error_page, "Select Highlighted")
+        self.assertEqual(self.app.error_list.tree.get_children(), (str(second),))
+        self.click(self.app.error_page, "Reset Selection")
+        self.click(self.app.error_page, "Set")
+        window = self.app.dialogs[-1]
+        form = self.app.dialog_forms[window][0]
+        form.variables["SavedSet"].set(form.widgets["SavedSet"].cget("values")[1])
+        self.click(window, "Apply Saved")
+        self.assertEqual(self.app.error_list.tree.get_children(), (str(second), str(first)))
+        self.assertEqual(self.db.sets(), [])
+        self.assertTrue(all(not value for value in self.app.error_filters.values()))
+        self.errors.assert_not_called()
+
+    def test_error_validation_and_canceled_highlight_preserve_form_and_list(self):
+        self.app.show_screen("ErrorMessage")
+        self.app.error_form.assign(error_values(Description=" "))
+        self.click(self.app.error_page, "Add")
+        self.errors.assert_called_once()
+        self.errors.reset_mock()
+        self.app.clear_error()
+        first, second = self.app.error_list.tree.get_children()[:2]
+        self.app.error_list.tree.selection_set(first)
+        self.root.update()
+        self.app.error_form.variables["Description"].set("Draft fix")
+        self.confirm.return_value = False
+        self.app.error_list.tree.selection_set(second)
+        self.root.update()
+        self.assertEqual(self.app.error_list.tree.selection(), (first,))
+        self.assertEqual(self.app.error_form.values()["Description"], "Draft fix")
+        self.app.open_filter()
+        window = self.app.dialogs[-1]
+        window.nav.buttons["Screen Help"].invoke()
+        help_window = self.app.dialogs[-1]
+        help_window.destroy()
+        self.assertEqual(self.root.grab_current(), window)
+        self.confirm.return_value = True
+        window.nav.buttons["Setup"].invoke()
+        self.root.update()
+        self.assertFalse(window.winfo_exists())
+        self.assertEqual(self.app.error_form.values()["Description"], "")
+        self.assertIsNone(self.root.grab_current())
+        self.errors.assert_not_called()
+
+    def test_print_snapshots_all_displayed_rows_in_current_order_and_escapes_text(self):
+        first = self.db.save_error(error_values(ErrorText="<script>bad()</script> & \"quote\"",
+                                                Description="1. Example fix\nMore details"))
+        second = self.db.save_error(error_values(ErrorText="Second", Description="Saved fix"))
+        self.db.save_error(error_values(ErrorText="Not listed"))
+        self.app.show_screen("ErrorMessage")
+        self.app.error_selected_ids = [first, second]
+        self.app.error_sort = (("ID", "desc"),)
+        self.app.refresh_errors()
+        self.app.error_list.tree.selection_set(str(first))
+        self.root.update()
+        self.app.error_form.variables["Description"].set("Uncommitted fix")
+        self.db.save_error(error_values(ErrorText="Second", Description="Changed in database"),
+                           second, error_values(ErrorText="Second", Description="Saved fix"))
+        path = Path(self.temp.name) / "report.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True) as browser:
+            self.app.print_errors()
+        browser.assert_called_once_with(path.as_uri())
+        report = path.read_text()
+        parsed = ReportCells()
+        parsed.feed(report)
+        self.assertEqual(parsed.cells, [
+            str(second), "Second", "1. Example cause", "Saved fix",
+            str(first), '<script>bad()</script> & "quote"', "1. Example cause", "1. Example fix\nMore details",
+        ])
+        self.assertNotIn("<script>bad()", report)
+        self.assertNotIn("Uncommitted fix", report)
+        self.assertNotIn("Not listed", report)
+        self.assertIn('window.print()', report)
+        self.errors.assert_not_called()
+
+    def test_print_empty_cancel_existing_file_and_browser_failure(self):
+        self.app.show_screen("ErrorMessage")
+        self.app.error_selected_ids = []
+        self.app.refresh_errors()
+        path = Path(self.temp.name) / "empty.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=""), \
+                patch("quilting.ui.webbrowser.open") as browser:
+            self.app.print_errors()
+            browser.assert_not_called()
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(path)), \
+                patch("quilting.ui.webbrowser.open", return_value=False):
+            self.click(self.app.error_page, "Print")
+        self.errors.assert_called_once()
+        self.assertIn("Open", self.errors.call_args.args[1])
+        report = path.read_text()
+        parsed = ReportCells()
+        parsed.feed(report)
+        self.assertEqual(parsed.cells, [])
+        self.assertIn("<th>Error Text</th>", report)
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(path)), \
+                patch("quilting.ui.webbrowser.open") as browser:
+            with self.assertRaises(FileExistsError):
+                self.app.print_errors()
+            browser.assert_not_called()
+        self.assertEqual(path.read_text(), report)
 
 
 if __name__ == "__main__":
