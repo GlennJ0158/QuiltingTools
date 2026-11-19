@@ -15,14 +15,48 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 ```
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
-The screen always shows the actual database path. A new database is initialized
-automatically. Version 0.1 databases prompt for a backed-up upgrade to add the
-Dropdown table; declining leaves the database unchanged. Close all other copies
+Fabric and Setup show the actual database path. A new database is initialized
+automatically. Databases from versions 0.1 and 0.2 prompt for a backed-up upgrade
+to add HelpText (and Dropdown for version 0.1); declining leaves the database
+unchanged. Close all other copies
 of the application before accepting. A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
 upgrades roll back. Unknown or incompatible databases are rejected.
 Tkinter must be available in the Python installation.
+
+### Navigation and help
+
+Every application screen and workflow window has the same top-right navigation:
+**Fabric / DropDown / HelpText / Setup / Screen Help**.
+Switching screens closes unfinished dialogs, releases their modal grabs, and
+resets unsaved entry forms before showing the destination. Unsaved input requires
+confirmation; declining keeps the current screen, input and dialog intact.
+This also applies when choosing the current screen again. Saved inventory,
+dropdown choices, help edits and selection sets are never undone by navigation.
+Fabric list filters, saved selections and sort order are retained.
+
+**Screen Help** opens help for the current screen or workflow without leaving it
+or discarding edits. Closing help restores the underlying dialog's input grab.
+Hover over an entry, button or list column for a tooltip; press **F1** for full
+help. For list columns, F1 uses the last column under the pointer (initially ID).
+Operating-system file pickers and confirmation/error prompts remain standard
+modal dialogs; dismiss them before using application navigation.
+
+**HelpText** maintains a generated tooltip/full-help pair for every application
+screen/field, list column and button. Select a row, edit the multiline **Hover
+Text** and **Full Text**, then choose **Update**. Table Name identifies the screen;
+Field Name is a field name, `Column:<name>`, `Button:<caption>` or `ScreenHelp`.
+These keys are read-only. Saved edits take effect on the next tooltip/F1/help
+lookup. Startup inserts missing help objects without overwriting user text.
+Text is plain text, not rich text.
+
+Click a HelpText column heading to toggle ascending/descending order. Its sort
+is saved separately from Fabric in the existing `ScreenState` table; no separate
+sort table is added. Existing `ErrorText` functionality is unchanged and further
+error-text maintenance is outside this change.
+
+### Fabric rectangles
 
 Each record represents **one physical usable rectangle**, not a quantity of
 interchangeable pieces. Enter its Fabric Name, Color, Pattern Name, Usable Width,
@@ -73,9 +107,10 @@ case or surrounding whitespace reuse the existing spelling rather than creating
 duplicates. Saving fabric also registers/canonicalizes these values at the
 database boundary.
 
-Open **Setup/Utilities > Dropdown**, choose a field, highlight an item, and use
+Open **DropDown** from the navigation bar, choose a field, highlight an item, and use
 **Set Default**. The next cleared/new form uses that default; existing records
-and unsaved form values are not changed. The setup page can also add items.
+are not changed. Navigating away from Fabric discards unsaved form values after
+confirmation. The DropDown screen can also add items.
 Grain Direction, Print Direction and Status get their defaults from the same
 `Dropdown` table, but keep their defined choices: arbitrary directions or stock
 statuses cannot be added.
@@ -112,7 +147,7 @@ Press F1 in an editable field for help.
 
 ### Backup and restore
 
-The controls are on the **Setup/Utilities** page, not the fabric form.
+The controls are on the **Setup** page, not the fabric form.
 **Backup Database** uses SQLite's consistent backup API, checks the resulting
 database, and publishes it only when complete. Unsaved form edits are not
 included. Choose a **new filename**: existing files are never overwritten.
@@ -153,8 +188,9 @@ Tkinter callback failures display an error and write a traceback to stderr.
 
 `QuiltingTools.py` is the entry point. `quilting/model.py` owns shared field
 definitions and exact measurements; `quilting/database.py` owns persistence,
-history, selections and backup/restore; `quilting/ui.py` owns screen behavior
-and shared form/list controls. All persistent application information is in
+history, selections and backup/restore; `quilting/helptext.py` defines the default
+help catalog; `quilting/ui.py` owns screen behavior and shared form/list controls.
+All persistent application information is in
 SQLite; the source code defines supported validation rules and schema.
 
 The integrated roadmap remains:
@@ -188,8 +224,9 @@ xvfb-run -a python -m unittest discover -v
 GUI tests require a display and are explicitly skipped without one. They exercise
 field bindings and round-trips, list alignment and button order, selection,
 filtering, saved sets, numeric sorting, unsaved edits, duplication from a highlighted
-record, compact left-aligned entries, dropdown defaults, minute-level timestamps
-and retirement.
+record, compact left-aligned entries, dropdown defaults, minute-level timestamps,
+retirement, navigation alignment and cleanup, nested modal help, complete
+control-help bindings, live help edits and independent HelpText sorting.
 Database tests cover validation, exact dimensions, stale updates, transaction
 rollback, history, persistence, error messages, dropdown normalization,
-backed-up upgrades/rollback and backup/restore.
+backed-up upgrades/rollback, HelpText validation and preservation, and backup/restore.

@@ -252,6 +252,7 @@ class DatabaseTests(unittest.TestCase):
         self.db.save_sort([("UsableWidth", "desc")])
         with self.db.connection:
             self.db.connection.execute("DROP TABLE Dropdown")
+            self.db.connection.execute("DROP TABLE HelpText")
             self.db.connection.execute("PRAGMA user_version = 1")
         before = {
             table: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")]
