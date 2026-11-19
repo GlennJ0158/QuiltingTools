@@ -1,8 +1,9 @@
 """Default help catalog, keyed by screen and field, column or button."""
 
 from .model import FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, SORT_FIELDS, Field
+from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 
-NAVIGATION = ("Fabric", "DropDown", "HelpText", "Setup", "Screen Help")
+NAVIGATION = ("Fabric", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
 DROPDOWN_FORM_FIELDS = (
     Field("FieldName", "choice"),
     Field("ListItem"),
@@ -49,6 +50,39 @@ SCREEN_HELP = {
         "preserved when the application restarts or new help objects are added. Click a column "
         "title to sort ascending or descending; the order is saved independently of Fabric.",
     ),
+    "ErrorMessage": (
+        "Maintain a searchable troubleshooting reference.",
+        "Add, Update or Delete reference messages using Error Text, Likely Cause and Description. "
+        "Numbered fixes in Description correspond to numbered likely causes. ID is generated. "
+        "Select Highlighted restricts the working list; Filter searches text in all three fields; "
+        "Set saves or recalls named snapshots; Sort saves multi-column ordering. Reset Selection "
+        "shows all messages. Print saves an HTML report of exactly the displayed rows in their "
+        "current order and opens the browser print dialog. Empty lists print headings only. "
+        "Unsaved form text is not printed. Reference edits and deletions do not change runtime "
+        "ErrorText dialogs. Defaults are populated once, not recreated after deletion. Braced "
+        "placeholders stand for variable runtime values; operating-system errors are represented "
+        "by their enclosing message template rather than every possible detail.",
+    ),
+    "Error Filter": (
+        "Search the ErrorMessage working list.",
+        "Match text anywhere in Error Text, Likely Cause and Description, ignoring ASCII case. "
+        "Nonblank criteria are combined with AND and any highlighted-record restriction. "
+        "Percent and underscore are literal characters. Blank fields impose no restriction. "
+        "Apply updates the working list; Cancel leaves it unchanged.",
+    ),
+    "Error Sort": (
+        "Choose the ErrorMessage list's saved multi-field order.",
+        "Choose distinct columns in priority order, with asc or desc for each. ID sorts "
+        "numerically and is added to break ties. Unused rows can be blank. Apply saves this "
+        "order independently of Fabric and HelpText; Print uses the displayed order.",
+    ),
+    "Error Set": (
+        "Save or recall a snapshot of the ErrorMessage working list.",
+        "Save Current saves IDs of all listed messages, not just highlights. Choose a unique "
+        "Set Name. Apply Saved clears other restrictions and recalls the snapshot. New messages "
+        "are not added automatically; deleted messages are removed from membership. Delete Saved "
+        "removes only the set, never messages. ErrorMessage sets are separate from Fabric sets.",
+    ),
     "Setup": (
         "Back up saved data or restore a backup to a separate database.",
         "Backup Database makes a verified copy of committed records at a new filename. "
@@ -91,6 +125,13 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
+    "ErrorText": ("Enter the error message or template.", "Required plain text up to 4,000 characters. "
+                  "Braces identify variable runtime details. Editing this troubleshooting reference "
+                  "does not change the message displayed by the program."),
+    "LikelyCause": ("Describe why this error may occur.", "Required plain text up to 4,000 characters. "
+                    "Number separate likely causes so Description can give a matching fix for each."),
+    "Description": ("Describe a likely fix for each cause.", "Required plain text up to 16,000 "
+                    "characters. Use the same numbering as Likely Cause and explain safe recovery."),
     "FabricName": ("Identify this physical rectangle.", "Required fabric name, up to 120 characters. "
                    "Several physical rectangles can share a name; each remains a separate record."),
     "Color": ("Describe the fabric color.", "Optional color description. Choose an existing value "
@@ -145,6 +186,15 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
+    "ErrorMessage": ("Open error-message maintenance.", "Switch to the searchable troubleshooting reference."),
+    "Delete": ("Delete the highlighted reference message.", "Highlight exactly one message. After "
+               "confirmation, delete its reference entry and saved-set memberships, not runtime ErrorText."),
+    "Set": ("Save or recall an error-message working list.", "Manage named snapshots of all currently "
+            "listed message IDs. These sets are independent of Fabric selections."),
+    "Print": ("Print exactly the listed messages in their current order.", "Save an HTML report, "
+              "then use the browser print dialog. All listed messages are included, not just "
+              "highlights; unsaved form edits are excluded. If the browser does not open, open "
+              "the saved report manually. An empty list produces a headings-only report."),
     "Fabric": ("Open Fabric inventory.", "Switch to the Fabric working list and entry form."),
     "DropDown": ("Open dropdown maintenance.", "Switch to fabric choice and default maintenance."),
     "HelpText": ("Open help maintenance.", "Switch to editable tooltip and detailed-help records."),
@@ -199,6 +249,11 @@ BUTTON_HELP = {
 }
 
 SCREEN_FIELDS = {
+    "ErrorMessage": ERROR_FIELDS,
+    "Error Filter": ERROR_FILTER_FIELDS,
+    "Error Sort": tuple(field for index in range(1, len(ERROR_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "Error Set": (Field("SavedSet"), Field("SetName")),
     "Fabric": FABRIC_FIELDS,
     "Filter": FILTER_FIELDS,
     "DropDown": DROPDOWN_FORM_FIELDS,
@@ -211,12 +266,18 @@ SCREEN_FIELDS = {
     "Screen Help": (Field("HelpContent"),),
 }
 SCREEN_COLUMNS = {
+    "ErrorMessage": ERROR_COLUMNS,
     "Fabric": LIST_COLUMNS,
     "DropDown": ("ID", "FieldName", "ListItem", "Def", "Use"),
     "HelpText": HELP_COLUMNS,
     "History": ("ID", "Action", "DateCreated"),
 }
 SCREEN_BUTTONS = {
+    "ErrorMessage": ("Add", "Update", "Delete", "Clear", "Select Highlighted", "Filter",
+                     "Set", "Sort", "Reset Selection", "Refresh", "Print"),
+    "Error Filter": ("Apply", "Clear Fields", "Cancel"),
+    "Error Sort": ("Apply", "Clear Fields", "Cancel"),
+    "Error Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "DropDown": ("Add Item", "Set Default"),
@@ -259,11 +320,27 @@ def default_help():
                 hover, full = "Save the selected help pair.", (
                     "Save Hover Text and Full Text for the selected generated key. Keys stay "
                     "unchanged. New tooltip and F1 lookups use the saved text immediately.")
+            if screen == "ErrorMessage" and button in (
+                    "Add", "Update", "Filter", "Sort", "Reset Selection"):
+                hover, full = {
+                    "Add": ("Save a new reference message.", "Validate all three text fields and "
+                            "save a new message with a generated ID, even when copying an existing row."),
+                    "Update": ("Save the highlighted reference message.", "Select exactly one row. "
+                               "Save the form; stale changes are rejected. Runtime errors are unchanged."),
+                    "Filter": SCREEN_HELP["Error Filter"],
+                    "Sort": SCREEN_HELP["Error Sort"],
+                    "Reset Selection": ("Show all saved reference messages.", "Clear text filters "
+                                        "and saved-set/highlight restrictions without deleting messages."),
+                }[button]
+            if screen == "Error Set" and button == "Delete Saved":
+                hover, full = ("Delete only the selected message set.",
+                               "After confirmation, remove the named snapshot. Messages and the "
+                               "current working list remain unchanged.")
             rows[screen, f"Button:{button}"] = hover, full
         for field in SCREEN_FIELDS.get(screen, ()):
-            if screen == "Sort":
+            if screen in ("Sort", "Error Sort"):
                 pair = (("Choose a distinct field for this priority.",
-                         "Choose a Fabric column; earlier rows have higher priority. Leave unused "
+                         "Choose a list column; earlier rows have higher priority. Leave unused "
                          "rows blank. ID is appended as a tie-breaker.") if field.name.startswith("SortField")
                         else ("Choose ascending or descending order.",
                               "asc sorts smallest to largest or A to Z; desc reverses the order. "
@@ -273,6 +350,12 @@ def default_help():
                          "Select a field to list its active choices and default. Changing this "
                          "selection does not modify any saved fabric.") if field.name == "FieldName"
                         else COLUMN_HELP["ListItem"])
+            elif screen == "Error Filter":
+                pair = (f"Search {field.label.lower()}.",
+                        "Blank means no restriction. Match literal text anywhere in this field, "
+                        "ignoring ASCII case. Nonblank fields are combined with AND.")
+            elif screen == "Error Set" and field.name == "SavedSet":
+                pair = ("Choose a saved message snapshot.", SCREEN_HELP["Error Set"][1])
             elif screen == "Filter" and field.name not in ("MinimumWidth", "MinimumLength"):
                 pair = (f"Filter fabric by {field.label.lower()}.",
                         "Blank means no restriction. " + (
