@@ -7,6 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .backs import MAX_PANELS, MINIMUM_PART, PALETTE
 from .helptext import (
     DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
     HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, default_help,
@@ -14,11 +15,11 @@ from .helptext import (
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
-    SORT_FIELDS, Field, FieldError, caption, normalize_sort, validate_fields,
+    SORT_FIELDS, Field, FieldError, caption, measurement, normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ERROR_SCHEMA = """
 CREATE TABLE ErrorMessage (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +76,56 @@ CREATE TABLE Dropdown (
 CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName)
     WHERE Def = 1 AND Use = 1;
 """
+BACK_SCHEMA = """
+CREATE TABLE QuiltBack (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    BackName TEXT NOT NULL CHECK(length(trim(BackName)) BETWEEN 1 AND 120),
+    QuiltWidth INTEGER NOT NULL CHECK(QuiltWidth > 0),
+    QuiltLength INTEGER NOT NULL CHECK(QuiltLength > 0),
+    Margin INTEGER NOT NULL CHECK(Margin >= 0),
+    SeamAllowance INTEGER NOT NULL CHECK(SeamAllowance >= 0),
+    BackWidth INTEGER NOT NULL CHECK(BackWidth > 0),
+    BackLength INTEGER NOT NULL CHECK(BackLength > 0),
+    LayoutDirection TEXT NOT NULL CHECK(LayoutDirection IN ('single', 'vertical', 'horizontal')),
+    RatioTier INTEGER NOT NULL CHECK(RatioTier IN (0, 1, 2)),
+    GrainConsistent INTEGER NOT NULL CHECK(GrainConsistent IN (0, 1)),
+    Status TEXT NOT NULL CHECK(Status IN ('Draft', 'Cut', 'Assembled')),
+    DateCreated TEXT NOT NULL,
+    DateModified TEXT NOT NULL
+);
+CREATE TABLE QuiltBackPanel (
+    QuiltBackID INTEGER NOT NULL REFERENCES QuiltBack(ID) ON DELETE CASCADE,
+    PanelNumber INTEGER NOT NULL CHECK(PanelNumber > 0),
+    FabricPieceID INTEGER NOT NULL REFERENCES FabricPiece(ID),
+    SourceRevision INTEGER NOT NULL CHECK(SourceRevision > 0),
+    FabricName TEXT NOT NULL CHECK(length(trim(FabricName)) BETWEEN 1 AND 120),
+    InventoryColor TEXT NOT NULL CHECK(length(InventoryColor) <= 120),
+    SourceGrain TEXT NOT NULL CHECK(SourceGrain IN ('Unknown', 'Along Length', 'Along Width')),
+    SourceWidth INTEGER NOT NULL CHECK(SourceWidth > 0),
+    SourceLength INTEGER NOT NULL CHECK(SourceLength > 0),
+    PaletteColor TEXT NOT NULL CHECK(length(trim(PaletteColor)) BETWEEN 1 AND 32),
+    CutWidth INTEGER NOT NULL CHECK(CutWidth > 0),
+    CutLength INTEGER NOT NULL CHECK(CutLength > 0),
+    FinishedWidth INTEGER NOT NULL CHECK(FinishedWidth > 0),
+    FinishedLength INTEGER NOT NULL CHECK(FinishedLength > 0),
+    GrainAxis TEXT CHECK(GrainAxis IN ('x', 'y')),
+    SourceX INTEGER NOT NULL CHECK(SourceX >= 0),
+    SourceY INTEGER NOT NULL CHECK(SourceY >= 0),
+    X INTEGER NOT NULL CHECK(X >= 0),
+    Y INTEGER NOT NULL CHECK(Y >= 0),
+    PRIMARY KEY (QuiltBackID, PanelNumber)
+);
+CREATE TABLE QuiltBackCutSource (
+    QuiltBackID INTEGER NOT NULL REFERENCES QuiltBack(ID),
+    FabricPieceID INTEGER NOT NULL REFERENCES FabricPiece(ID),
+    SourceRevision INTEGER NOT NULL CHECK(SourceRevision > 0),
+    BeforeValues TEXT NOT NULL,
+    AfterValues TEXT NOT NULL,
+    PlannedCutArea INTEGER NOT NULL CHECK(PlannedCutArea > 0),
+    RemnantPieceID INTEGER REFERENCES FabricPiece(ID),
+    PRIMARY KEY (QuiltBackID, FabricPieceID)
+);
+"""
 SCHEMA = """
 CREATE TABLE FabricPiece (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,7 +177,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA
+""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA + BACK_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -141,6 +192,21 @@ TABLE_COLUMNS = {
     "ErrorMessageMember": ("SelectionSetID", "ErrorMessageID"),
     "WorkingListSet": ("ID", "ScreenName", "ScopeName", "SetName", "DateCreated"),
     "WorkingListMember": ("SelectionSetID", "RecordID"),
+    "QuiltBack": (
+        "ID", "BackName", "QuiltWidth", "QuiltLength", "Margin", "SeamAllowance",
+        "BackWidth", "BackLength", "LayoutDirection", "RatioTier", "GrainConsistent",
+        "Status", "DateCreated", "DateModified",
+    ),
+    "QuiltBackPanel": (
+        "QuiltBackID", "PanelNumber", "FabricPieceID", "SourceRevision", "FabricName",
+        "InventoryColor", "SourceGrain", "SourceWidth", "SourceLength", "PaletteColor",
+        "CutWidth", "CutLength", "FinishedWidth", "FinishedLength", "GrainAxis",
+        "SourceX", "SourceY", "X", "Y",
+    ),
+    "QuiltBackCutSource": (
+        "QuiltBackID", "FabricPieceID", "SourceRevision", "BeforeValues", "AfterValues",
+        "PlannedCutArea", "RemnantPieceID",
+    ),
 }
 SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
@@ -189,7 +255,8 @@ class Database:
                     self._seed_dropdowns()
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3, 4)):
+                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in
+                  (1, 2, 3, 4, 5)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -208,10 +275,13 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, 4, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
+                or version not in ((1, 2, 3, 4, 5, SCHEMA_VERSION)
+                                   if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
             if version < 5 and table in ("WorkingListSet", "WorkingListMember"):
+                continue
+            if version < 6 and table in ("QuiltBack", "QuiltBackPanel", "QuiltBackCutSource"):
                 continue
             if version < 4 and table in ("ErrorMessage", "ErrorMessageSet", "ErrorMessageMember"):
                 continue
@@ -241,12 +311,13 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4):
+            if version not in (1, 2, 3, 4, 5):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
                       + (HELP_SCHEMA if version < 3 else "")
                       + (ERROR_SCHEMA if version < 4 else "")
-                      + WORKING_LIST_SCHEMA)
+                      + (WORKING_LIST_SCHEMA if version < 5 else "")
+                      + BACK_SCHEMA)
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
@@ -534,6 +605,229 @@ class Database:
                 (piece_id, action, json.dumps(before) if before else None, json.dumps(after), timestamp),
             )
         return piece_id
+
+    def save_back_draft(self, back_name, quilt_width, quilt_length, margin, seam_allowance, layout):
+        name = validate_fields(
+            (Field("BackName", required=True),), {"BackName": back_name},
+        )["BackName"]
+        if (not layout.panels or len(layout.panels) > MAX_PANELS or layout.ratio_tier < 0
+                or layout.direction not in ("single", "vertical", "horizontal")):
+            raise FieldError("Required", "FabricPieceID")
+        if (layout.target_width != quilt_width + 2 * margin
+                or layout.target_length != quilt_length + 2 * margin
+                or layout.seam_allowance != seam_allowance):
+            raise FieldError("Conflict", "QuiltBack")
+        timestamp = now()
+        with self.connection:
+            sources = {}
+            source_cuts = {}
+            for panel in layout.panels:
+                if min(panel.finished_width, panel.finished_length) < MINIMUM_PART:
+                    raise FieldError("Measurement", "Panel")
+                source = self.get_piece(panel.source_id)
+                if source["Revision"] != panel.source_revision or source["Status"] != "Available":
+                    raise FieldError("Conflict", "FabricPieceID")
+                if panel.palette_color not in PALETTE:
+                    raise FieldError("Choice", "PaletteColor")
+                if (panel.source_x < 0 or panel.source_y < 0
+                        or panel.source_x + panel.cut_width > source["UsableWidth"]
+                        or panel.source_y + panel.cut_length > source["UsableLength"]):
+                    raise FieldError("Measurement", "Panel")
+                expected_grain = (
+                    "x" if source["GrainDirection"] == "Along Width" else
+                    "y" if source["GrainDirection"] == "Along Length" else None
+                )
+                if panel.grain_axis != expected_grain:
+                    raise FieldError("Conflict", "GrainDirection")
+                rect = (panel.source_x, panel.source_y, panel.cut_width, panel.cut_length)
+                for previous in source_cuts.setdefault(panel.source_id, []):
+                    if (rect[0] < previous[0] + previous[2]
+                            and previous[0] < rect[0] + rect[2]
+                            and rect[1] < previous[1] + previous[3]
+                            and previous[1] < rect[1] + rect[3]):
+                        raise FieldError("Measurement", "Panel")
+                source_cuts[panel.source_id].append(rect)
+                sources[panel.source_id] = source
+            known_grains = {panel.grain_axis for panel in layout.panels if panel.grain_axis}
+            if layout.grain_consistent != (len(known_grains) <= 1):
+                raise FieldError("Conflict", "GrainDirection")
+            ordered = sorted(layout.panels, key=lambda panel: panel.number)
+            if [panel.number for panel in ordered] != list(range(1, len(ordered) + 1)):
+                raise FieldError("Measurement", "Panel")
+            position = 0
+            for index, panel in enumerate(ordered):
+                joins = int(index > 0) + int(index < len(ordered) - 1)
+                if layout.direction == "vertical":
+                    valid = (
+                        panel.x == position and panel.y == 0
+                        and panel.finished_length == layout.target_length
+                        and panel.cut_width == panel.finished_width + joins * seam_allowance
+                        and panel.cut_length == layout.target_length
+                    )
+                    position += panel.finished_width
+                elif layout.direction == "horizontal":
+                    valid = (
+                        panel.y == position and panel.x == 0
+                        and panel.finished_width == layout.target_width
+                        and panel.cut_length == panel.finished_length + joins * seam_allowance
+                        and panel.cut_width == layout.target_width
+                    )
+                    position += panel.finished_length
+                else:
+                    valid = (
+                        len(ordered) == 1 and panel.x == panel.y == 0
+                        and panel.finished_width == layout.target_width
+                        and panel.finished_length == layout.target_length
+                        and panel.cut_width == layout.target_width
+                        and panel.cut_length == layout.target_length
+                    )
+                if not valid:
+                    raise FieldError("Measurement", "Panel")
+            if ((layout.direction == "vertical" and position != layout.target_width)
+                    or (layout.direction == "horizontal" and position != layout.target_length)):
+                raise FieldError("Measurement", "Panel")
+            cursor = self.connection.execute(
+                "INSERT INTO QuiltBack (BackName, QuiltWidth, QuiltLength, Margin, SeamAllowance, "
+                "BackWidth, BackLength, LayoutDirection, RatioTier, GrainConsistent, Status, "
+                "DateCreated, DateModified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?)",
+                (name, quilt_width, quilt_length, margin, seam_allowance,
+                 layout.target_width, layout.target_length,
+                 "single" if len(layout.panels) == 1 else layout.direction,
+                 layout.ratio_tier, int(layout.grain_consistent), timestamp, timestamp),
+            )
+            back_id = cursor.lastrowid
+            self.connection.executemany(
+                "INSERT INTO QuiltBackPanel (QuiltBackID, PanelNumber, FabricPieceID, "
+                "SourceRevision, FabricName, InventoryColor, SourceGrain, SourceWidth, "
+                "SourceLength, PaletteColor, "
+                "CutWidth, CutLength, FinishedWidth, "
+                "FinishedLength, GrainAxis, SourceX, SourceY, X, Y) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ((back_id, panel.number, panel.source_id, panel.source_revision,
+                  panel.source_name, panel.source_color, sources[panel.source_id]["GrainDirection"],
+                  sources[panel.source_id]["UsableWidth"], sources[panel.source_id]["UsableLength"],
+                  panel.palette_color, panel.cut_width, panel.cut_length, panel.finished_width,
+                  panel.finished_length, panel.grain_axis, panel.source_x, panel.source_y,
+                  panel.x, panel.y)
+                 for panel in layout.panels),
+            )
+        return back_id
+
+    def quilt_backs(self):
+        return [dict(row) for row in self.connection.execute(
+            "SELECT ID, BackName, BackWidth, BackLength, Status, DateModified "
+            "FROM QuiltBack ORDER BY DateModified DESC, ID DESC",
+        )]
+
+    def get_quilt_back(self, back_id):
+        row = self.connection.execute("SELECT * FROM QuiltBack WHERE ID = ?", (back_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "QuiltBackID")
+        back = dict(row)
+        back["Panels"] = [dict(panel) for panel in self.connection.execute(
+            "SELECT * FROM QuiltBackPanel WHERE QuiltBackID = ? ORDER BY PanelNumber", (back_id,),
+        )]
+        return back
+
+    def confirm_back_cut(self, back_id, remnants):
+        """Record operator-reported cuts and remnants with inventory history atomically."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            back = self.get_quilt_back(back_id)
+            if back["Status"] != "Draft":
+                raise FieldError("Conflict", "QuiltBackID")
+            panels_by_source = {}
+            for panel in back["Panels"]:
+                panels_by_source.setdefault(panel["FabricPieceID"], []).append(panel)
+            if set(remnants) != set(panels_by_source):
+                raise FieldError("Binding", "Remnants", detail="one remainder entry is required per source piece")
+            timestamp = now()
+            for source_id, panels in panels_by_source.items():
+                source = self.get_piece(source_id)
+                expected_revision = panels[0]["SourceRevision"]
+                if (any(panel["SourceRevision"] != expected_revision for panel in panels)
+                        or source["Revision"] != expected_revision or source["Status"] != "Available"):
+                    raise FieldError("Conflict", "FabricPieceID")
+                planned_cut_area = sum(panel["CutWidth"] * panel["CutLength"] for panel in panels)
+                remaining = remnants[source_id]
+                remnant_values = None
+                if remaining is not None:
+                    if not isinstance(remaining, (tuple, list)) or len(remaining) != 2:
+                        raise FieldError("Binding", "Remnants", detail="a remnant needs width and length")
+                    width = measurement(str(remaining[0]), "UsableWidth")
+                    length = measurement(str(remaining[1]), "UsableLength")
+                    remnant_values = {
+                        **{name: source[name] for name in FABRIC_NAMES},
+                        "UsableWidth": width,
+                        "UsableLength": length,
+                        "Status": "Available",
+                        "Notes": f"Reusable remnant from Quilt Back {back_id}, source {source_id}.",
+                    }
+                before = source
+                cursor = self.connection.execute(
+                    "UPDATE FabricPiece SET Status = 'Retired', Revision = Revision + 1, "
+                    "DateModified = ? WHERE ID = ? AND Revision = ? AND Status = 'Available'",
+                    (timestamp, source_id, expected_revision),
+                )
+                if cursor.rowcount != 1:
+                    raise FieldError("Conflict", "FabricPieceID")
+                after = self.get_piece(source_id)
+                self.connection.execute(
+                    "INSERT INTO FabricHistory (FabricPieceID, Action, BeforeValues, AfterValues, DateCreated) "
+                    "VALUES (?, 'Updated', ?, ?, ?)",
+                    (source_id, json.dumps(before), json.dumps(after), timestamp),
+                )
+                remnant_id = self._add_piece_in_transaction(remnant_values, timestamp) if remnant_values else None
+                self.connection.execute(
+                    "INSERT INTO QuiltBackCutSource (QuiltBackID, FabricPieceID, SourceRevision, "
+                    "BeforeValues, AfterValues, PlannedCutArea, RemnantPieceID) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (back_id, source_id, expected_revision, json.dumps(before), json.dumps(after),
+                     planned_cut_area, remnant_id),
+                )
+            self.connection.execute(
+                "UPDATE QuiltBack SET Status = 'Cut', DateModified = ? WHERE ID = ? AND Status = 'Draft'",
+                (timestamp, back_id),
+            )
+            self.connection.commit()
+        except (sqlite3.Error, FieldError, TypeError, ValueError):
+            self.connection.rollback()
+            raise
+        return self.get_quilt_back(back_id)
+
+    def _add_piece_in_transaction(self, values, timestamp):
+        clean = dict(values)
+        for name in DROPDOWN_FIELDS:
+            clean[name] = self._dropdown_item(name, clean[name])
+        columns = ", ".join(FABRIC_NAMES)
+        placeholders = ", ".join("?" for _ in FABRIC_NAMES)
+        cursor = self.connection.execute(
+            f"INSERT INTO FabricPiece ({columns}, DateCreated, DateModified) "
+            f"VALUES ({placeholders}, ?, ?)",
+            (*(clean[name] for name in FABRIC_NAMES), timestamp, timestamp),
+        )
+        piece_id = cursor.lastrowid
+        after = self.get_piece(piece_id)
+        self.connection.execute(
+            "INSERT INTO FabricHistory (FabricPieceID, Action, BeforeValues, AfterValues, DateCreated) "
+            "VALUES (?, 'Added', NULL, ?, ?)",
+            (piece_id, json.dumps(after), timestamp),
+        )
+        return piece_id
+
+    def mark_quilt_back_assembled(self, back_id):
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE QuiltBack SET Status = 'Assembled', DateModified = ? "
+                "WHERE ID = ? AND Status = 'Cut'", (now(), back_id),
+            )
+            if cursor.rowcount != 1:
+                if self.connection.execute(
+                    "SELECT 1 FROM QuiltBack WHERE ID = ?", (back_id,),
+                ).fetchone() is None:
+                    raise FieldError("MissingRecord", "QuiltBackID")
+                raise FieldError("Conflict", "QuiltBackID")
+        return self.get_quilt_back(back_id)
 
     def pieces(self, filters=None, selected_ids=None, sort=DEFAULT_SORT):
         values = {field.name: "" for field in FILTER_FIELDS} if filters is None else filters

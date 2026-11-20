@@ -711,6 +711,59 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
         self.errors.assert_not_called()
 
+    def test_quilt_back_plan_preview_cut_confirmation_and_inventory_adjustment(self):
+        source_ids = [
+            self.db.save_piece(fabric(
+                FabricName=f"Red backing {index}", Color="Red", UsableWidth="42",
+                UsableLength="60", GrainDirection="Along Width",
+            ))
+            for index in range(2)
+        ]
+        self.app.show_screen("Quilt Backs")
+        self.app.back_form.assign({
+            "BackName": "Guest back",
+            "QuiltWidth": "50",
+            "QuiltLength": "50",
+            "Margin": "0",
+            "SeamAllowance": "1",
+        })
+        self.app.back_stock.tree.selection_set(tuple(map(str, source_ids)))
+        self.app.back_palette[source_ids[0]] = "Teal"
+        self.app.generate_back_plans()
+        self.assertTrue(self.app.back_layouts)
+        self.assertEqual(self.app.back_selected_layout.panels[0].palette_color, "Teal")
+        self.app.preview_back()
+        preview = self.dialog()
+        self.assertTrue(any(isinstance(widget, tk.Canvas) for widget in descendants(preview)))
+        back_id = self.app.save_back_draft()
+        back_id = int(back_id) if back_id else int(self.app.back_selected_id)
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Draft")
+        self.assertTrue(all(self.db.get_piece(piece_id)["Status"] == "Available"
+                            for piece_id in source_ids))
+        report_path = Path(self.temp.name) / "back.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(report_path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True):
+            self.app.print_back_plan()
+        report = report_path.read_text(encoding="utf-8")
+        self.assertIn("<svg", report)
+        self.assertIn("Inventory fabric", report)
+        self.assertIn("Teal", report)
+        self.app.open_back_cut()
+        dialog_window = next(iter(self.app.dialog_forms))
+        form = self.app.dialog_forms[dialog_window][0]
+        first_source, second_source = source_ids
+        form.variables[f"RemainingWidth{first_source}"].set("5")
+        form.variables[f"RemainingLength{first_source}"].set("10")
+        self.app.commit_back_cut(
+            dialog_window, form, {source_id: {} for source_id in source_ids},
+        )
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Cut")
+        self.assertTrue(all(self.db.get_piece(piece_id)["Status"] == "Retired"
+                            for piece_id in source_ids))
+        self.app.mark_back_assembled()
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Assembled")
+        self.errors.assert_not_called()
+
     def test_helptext_list_controls_filter_sort_and_named_selection(self):
         self.app.show_screen("HelpText")
         labels = [widget.cget("text") for widget in descendants(self.app.help_page)
