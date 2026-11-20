@@ -147,7 +147,8 @@ class ErrorMessageTests(unittest.TestCase):
         self.db.save_set("Keep", [piece_id])
         self.db.save_sort((("UsableWidth", "desc"),))
         with self.db.connection:
-            for table in ("ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
+            for table in ("WorkingListMember", "WorkingListSet",
+                          "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("PRAGMA user_version = 3")
         tables = ("FabricPiece", "FabricHistory", "SelectionSet", "SelectionMember",

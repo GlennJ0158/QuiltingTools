@@ -251,7 +251,8 @@ class DatabaseTests(unittest.TestCase):
         self.db.save_set("Keep these", [piece_id])
         self.db.save_sort([("UsableWidth", "desc")])
         with self.db.connection:
-            for table in ("ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
+            for table in ("WorkingListMember", "WorkingListSet",
+                          "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE Dropdown")
             self.db.connection.execute("DROP TABLE HelpText")

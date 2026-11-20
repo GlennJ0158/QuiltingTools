@@ -80,10 +80,72 @@ class HelpTextTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.load_sort("HelpTextSort")
 
+    def test_additional_working_lists_filter_sort_and_scope_saved_sets(self):
+        self.db.add_dropdown_item("Color", "Blue")
+        self.db.add_dropdown_item("Color", "Sage")
+        self.db.add_dropdown_item("PatternName", "Blue")
+        dropdown_ids = {row["ListItem"]: row["ID"] for row in self.db.dropdown_rows("Color")}
+        sage = dropdown_ids["Sage"]
+        dropdown_filter = {"ListItem": "a", "Default": ""}
+        self.assertEqual([row["ListItem"] for row in self.db.dropdown_rows(
+            "Color", dropdown_filter)], ["Sage"])
+        self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
+        self.assertEqual(self.db.load_sort("DropDownSort"), (("ListItem", "desc"), ("ID", "asc")))
+        color_set = self.db.save_set("Only Sage", [sage], "DropDown", "Color")
+        self.assertEqual(self.db.set_members(color_set, "DropDown", "Color"), [sage])
+        self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
+        with self.assertRaises(FieldError):
+            self.db.set_members(color_set, "DropDown", "PatternName")
+
+        help_rows = self.db.help_rows({"TableName": "History", "FieldName": "", "HoverText": "", "FullText": ""})
+        self.assertTrue(help_rows)
+        help_set = self.db.save_set("History help", [help_rows[0]["ID"]], "HelpText")
+        self.assertEqual(self.db.set_members(help_set, "HelpText"), [help_rows[0]["ID"]])
+        self.db.save_sort((("TableName", "desc"), ("ID", "asc")), "HelpTextSort")
+        table_names = [row["TableName"] for row in self.db.help_rows()]
+        self.assertEqual(table_names[0], sorted(table_names, key=str.casefold, reverse=True)[0])
+
+        piece_id = self.db.save_piece(fabric())
+        self.db.save_piece(fabric(Notes="Changed"), piece_id, 1)
+        history_filter = {"Action": "Updated", "DateCreated": "", "Values": "Changed"}
+        history = self.db.history(piece_id, history_filter)
+        self.assertEqual(len(history), 1)
+        history_set = self.db.save_set("Update", [history[0]["ID"]], "History", piece_id)
+        other_piece = self.db.save_piece(fabric(FabricName="Second"))
+        self.assertEqual(self.db.sets("History", other_piece), [])
+        self.assertEqual(self.db.set_members(history_set, "History", piece_id), [history[0]["ID"]])
+        self.assertEqual(dropdown_ids["Blue"], self.db.dropdown_rows("Color")[1]["ID"])
+
+    def test_version_four_upgrade_adds_working_list_tables_without_losing_data(self):
+        piece_id = self.db.save_piece(fabric())
+        history_id = self.db.history(piece_id)[0]["ID"]
+        message_id = self.db.save_error({
+            "ErrorText": "Existing error",
+            "LikelyCause": "Existing cause",
+            "Description": "Existing fix",
+        })
+        self.db.save_set("Existing errors", [message_id], "ErrorMessage")
+        with self.db.connection:
+            self.db.connection.execute("DROP TABLE WorkingListMember")
+            self.db.connection.execute("DROP TABLE WorkingListSet")
+            self.db.connection.execute("PRAGMA user_version = 4")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(self.db.history(piece_id)[0]["ID"], history_id)
+        self.assertEqual(self.db.get_error(message_id)["ErrorText"], "Existing error")
+        self.assertEqual(self.db.sets("ErrorMessage")[0]["SetName"], "Existing errors")
+        self.assertEqual(self.db.sets("History", piece_id), [])
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 4)
+
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
-            for table in ("ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
+            for table in ("WorkingListMember", "WorkingListSet",
+                          "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE HelpText")
             self.db.connection.execute("PRAGMA user_version = 2")

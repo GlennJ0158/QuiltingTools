@@ -667,5 +667,121 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(path.read_text(), report)
 
 
+    def test_dropdown_list_controls_filter_sort_and_scope_saved_sets(self):
+        self.app.show_screen("DropDown")
+        labels = [widget.cget("text") for widget in descendants(self.app.dropdown_page)
+                  if isinstance(widget, ttk.Button)]
+        start = labels.index("Select Highlighted")
+        self.assertEqual(labels[start:start + 5], [
+            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+        ])
+        self.app.dropdown_form.variables["FieldName"].set("Color")
+        self.db.add_dropdown_item("Color", "Blue")
+        self.db.add_dropdown_item("Color", "Sage")
+        sage = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Sage")
+        self.app.refresh_dropdowns()
+        self.click(self.app.dropdown_page, "Filter")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["ListItem"].set("sa")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(sage),))
+        self.click(self.app.dropdown_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("Sage choices")
+        self.click(self.app.dialogs[-1], "Save Current")
+        self.click(self.app.dropdown_page, "Reset Selection")
+        self.app.dropdown_list.tree.selection_set(str(sage))
+        self.click(self.app.dropdown_page, "Select Highlighted")
+        self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(sage),))
+        self.click(self.app.dropdown_page, "Reset Selection")
+        self.click(self.app.dropdown_page, "Sort")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.defaults()
+        form.variables["SortField1"].set("List Item")
+        form.variables["Direction1"].set("desc")
+        self.click(self.app.dialogs[-1], "Apply")
+        names = [self.app.dropdown_list.tree.item(item, "values")[2]
+                 for item in self.app.dropdown_list.tree.get_children()]
+        self.assertEqual(names, sorted(names, reverse=True))
+        self.click(self.app.dropdown_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SavedSet"].set(form.widgets["SavedSet"].cget("values")[1])
+        self.click(self.app.dialogs[-1], "Apply Saved")
+        self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(sage),))
+        self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
+        self.errors.assert_not_called()
+
+    def test_helptext_list_controls_filter_sort_and_named_selection(self):
+        self.app.show_screen("HelpText")
+        labels = [widget.cget("text") for widget in descendants(self.app.help_page)
+                  if isinstance(widget, ttk.Button)]
+        start = labels.index("Select Highlighted")
+        self.assertEqual(labels[start:start + 5], [
+            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+        ])
+        self.click(self.app.help_page, "Filter")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["TableName"].set("History")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertTrue(self.app.help_rows)
+        self.assertTrue(all("history" in row["TableName"].lower() for row in self.app.help_rows))
+        first = self.app.help_rows[0]["ID"]
+        self.click(self.app.help_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("History help")
+        self.click(self.app.dialogs[-1], "Save Current")
+        self.click(self.app.help_page, "Reset Selection")
+        self.app.help_list.tree.selection_set(str(first))
+        self.click(self.app.help_page, "Select Highlighted")
+        self.assertEqual(self.app.help_list.tree.get_children(), (str(first),))
+        self.click(self.app.help_page, "Reset Selection")
+        self.click(self.app.help_page, "Sort")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SortField1"].set("Table Name")
+        form.variables["Direction1"].set("desc")
+        self.click(self.app.dialogs[-1], "Apply")
+        tables = [row["TableName"] for row in self.app.help_rows]
+        self.assertEqual(tables, sorted(tables, key=str.casefold, reverse=True))
+        self.errors.assert_not_called()
+
+    def test_history_list_controls_are_scoped_to_the_current_piece(self):
+        piece_id = self.add_piece()
+        self.app.form.variables["Notes"].set("updated history value")
+        self.app.update()
+        self.app.open_history()
+        window = self.app.dialogs[-1]
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        labels = [widget.cget("text") for widget in descendants(window)
+                  if isinstance(widget, ttk.Button)]
+        start = labels.index("Select Highlighted")
+        self.assertEqual(labels[start:start + 5], [
+            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+        ])
+        self.click(window, "Filter")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["Action"].set("Updated")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(len(listing.tree.get_children()), 1)
+        updated_id = listing.tree.get_children()[0]
+        self.click(window, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("Updated only")
+        self.click(self.app.dialogs[-1], "Save Current")
+        self.click(window, "Reset Selection")
+        self.assertEqual(len(listing.tree.get_children()), 2)
+        listing.tree.selection_set(updated_id)
+        self.click(window, "Select Highlighted")
+        self.assertEqual(listing.tree.get_children(), (updated_id,))
+        self.click(window, "Reset Selection")
+        self.click(window, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SavedSet"].set(form.widgets["SavedSet"].cget("values")[1])
+        self.click(self.app.dialogs[-1], "Apply Saved")
+        self.assertEqual(listing.tree.get_children(), (updated_id,))
+        self.assertEqual(self.db.sets("History", piece_id)[0]["SetName"], "Updated only")
+        other_piece = self.db.save_piece(fabric(FabricName="Other piece"))
+        self.assertEqual(self.db.sets("History", other_piece), [])
+        self.errors.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
