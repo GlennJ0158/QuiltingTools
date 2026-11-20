@@ -16,9 +16,9 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases from versions 0.1 through 0.3 prompt for a backed-up upgrade
-to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1); declining leaves the database
-unchanged. Close all other copies
+automatically. Databases from versions 0.1 through 0.4 prompt for a backed-up upgrade
+to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1) and working-list
+selection snapshots; declining leaves the database unchanged. Close all other copies
 of the application before accepting. A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
@@ -51,9 +51,10 @@ These keys are read-only. Saved edits take effect on the next tooltip/F1/help
 lookup. Startup inserts missing help objects without overwriting user text.
 Text is plain text, not rich text.
 
-Click a HelpText column heading to toggle ascending/descending order. Its sort
-is saved separately from Fabric in the existing `ScreenState` table; no separate
-sort table is added. Existing runtime `ErrorText` functionality is unchanged.
+HelpText includes the same Filter, Set Selection and multi-column Sort controls as
+the other working lists. Its sort is saved separately from Fabric in the existing
+`ScreenState` table; no separate sort table is added. Existing runtime `ErrorText`
+functionality is unchanged.
 
 ### Error-message reference
 
@@ -188,6 +189,16 @@ not the number of highlighted rows. Numeric values **and their column headings**
 are right-aligned; all other values and headings are left-aligned. Internal
 descriptive names such as `UsableWidth` appear as `Usable Width` in labels.
 Press F1 in an editable field for help.
+
+The **DropDown** choices, **HelpText** catalog and read-only **History** list use
+the same selection, filtering, named-set and multi-column sort workflow. Dropdown
+sets are scoped to the currently selected fabric field; History sets are scoped
+to the currently selected piece. Dropdown filters search List Item or select
+default/non-default rows. HelpText filters search each text/key column. History
+filters match action, timestamp or saved Before/After values. Each list's sort is
+saved independently; HelpText no longer relies on heading-click sorting. Applying
+a saved set clears that list's other restrictions, and Reset Selection restores
+all rows in the current scope.
 
 ### Backup and restore
 

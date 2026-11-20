@@ -15,6 +15,21 @@ HELP_FIELDS = (
     Field("FullText", required=True, limit=16000, kind="memo", width=80),
 )
 HELP_COLUMNS = ("ID", "TableName", "FieldName", "HoverText", "FullText")
+DROPDOWN_COLUMNS = ("ID", "FieldName", "ListItem", "Def", "Use")
+HISTORY_COLUMNS = ("ID", "Action", "DateCreated")
+DROPDOWN_FILTER_FIELDS = (
+    Field("ListItem"),
+    Field("Default", "choice", choices=("", "Yes", "No")),
+)
+HELP_FILTER_FIELDS = tuple(
+    Field(name, limit=16000 if name == "FullText" else 4000)
+    for name in HELP_COLUMNS[1:]
+)
+HISTORY_FILTER_FIELDS = (
+    Field("Action", "choice", choices=("", "Added", "Updated")),
+    Field("DateCreated"),
+    Field("Values", limit=16000),
+)
 
 SCREEN_HELP = {
     "Fabric": (
@@ -29,10 +44,11 @@ SCREEN_HELP = {
     ),
     "DropDown": (
         "Maintain fabric choices and defaults for new records.",
-        "Choose a fabric field to list its active choices. Add Item saves a new choice immediately. "
-        "Highlight one row and choose Set Default to use it on the next new or cleared fabric form. "
-        "Blank can be a default. Grain Direction, Print Direction and Status have fixed choices "
-        "that cannot be extended. Existing fabric records are not changed.",
+        "Choose a fabric field to list its active choices. Select Highlighted, Filter, Set Selection "
+        "and Sort operate on that field's list; saved sets are separate for each field. Add Item saves "
+        "a new choice immediately. Highlight one row and choose Set Default to use it on the next new "
+        "or cleared fabric form. Blank can be a default. Grain Direction, Print Direction and Status "
+        "have fixed choices that cannot be extended. Existing fabric records are not changed.",
     ),
     "Add Item": (
         "Add a fabric choice without saving the fabric form.",
@@ -45,7 +61,8 @@ SCREEN_HELP = {
         "Edit the tooltip and detailed help for application controls.",
         "Highlight one help record. Table Name identifies its screen; Field Name identifies its "
         "field, Column: name, Button: caption, or ScreenHelp entry. Edit Hover Text and Full Text, "
-        "then choose Update. Hover Text appears as a tooltip and Full Text appears with F1. "
+        "then choose Update. Select Highlighted, Filter, Set Selection and Sort manage the list; "
+        "saved sets contain HelpText row IDs. Hover Text appears as a tooltip and Full Text appears with F1. "
         "ScreenHelp entries supply Screen Help. Generated keys are read-only; user edits are "
         "preserved when the application restarts or new help objects are added. Click a column "
         "title to sort ascending or descending; the order is saved independently of Fabric.",
@@ -111,9 +128,60 @@ SCREEN_HELP = {
     ),
     "History": (
         "Review committed additions and updates to a fabric rectangle.",
-        "Highlight a history row to see its Before and After values. Each inventory save and its "
-        "history commit together. Measurements display in inches and timestamps display local "
-        "time to the minute. This screen is read-only.",
+        "Highlight a history row to see its Before and After values. Select Highlighted, Filter, "
+        "Set Selection and Sort operate only on this piece's history; saved sets are scoped to "
+        "this piece. Reset Selection restores its full history. Each inventory save and its history "
+        "commit together. Measurements display in inches and timestamps display local time to the "
+        "minute. This screen is read-only.",
+    ),
+    "DropDown Filter": (
+        "Restrict the active choices for the selected fabric field.",
+        "List Item matches literal text anywhere in the choice, ignoring case. Default selects "
+        "only the current default or all other choices. Apply updates this field's working list; "
+        "Reset Selection removes the filter and highlighted-row restriction.",
+    ),
+    "DropDown Sort": (
+        "Choose the active choices' saved multi-field order.",
+        "Choose distinct columns in priority order, with asc or desc for each. Leave unused rows "
+        "blank. The default order puts the default choice first; ID is appended to break ties.",
+    ),
+    "DropDown Set": (
+        "Save or recall a snapshot of the selected fabric field's choices.",
+        "Save Current saves IDs of all listed choices, not just highlights. Sets are scoped to the "
+        "currently selected field. Applying a set clears other list restrictions; deleting it "
+        "never changes the source choices.",
+    ),
+    "HelpText Filter": (
+        "Search the HelpText working list.",
+        "Each nonblank Table Name, Field Name, Hover Text and Full Text criterion matches literal "
+        "text anywhere in that field, ignoring case. Criteria are combined with AND. Apply updates "
+        "the list; Reset Selection clears filters and highlighted-row restrictions.",
+    ),
+    "HelpText Sort": (
+        "Choose the HelpText list's saved multi-field order.",
+        "Choose distinct columns in priority order, with asc or desc for each. ID is appended to "
+        "break ties. This sort is saved independently from other lists.",
+    ),
+    "HelpText Set": (
+        "Save or recall a snapshot of HelpText rows.",
+        "Save Current saves IDs of all listed help records, not just highlights. Applying a set "
+        "clears other restrictions. Deleting a set never changes help text.",
+    ),
+    "History Filter": (
+        "Search the selected fabric piece's history.",
+        "Action matches Added or Updated exactly. Date Created and Values match literal text "
+        "anywhere in their displayed timestamp or saved Before/After snapshots, ignoring case. "
+        "Nonblank criteria are combined with AND.",
+    ),
+    "History Sort": (
+        "Choose this piece's history order.",
+        "Choose distinct columns in priority order, with asc or desc for each. ID is appended to "
+        "break ties. The sort setting is shared by History windows.",
+    ),
+    "History Set": (
+        "Save or recall a snapshot of this piece's history.",
+        "Save Current saves IDs of all listed history rows, not just highlights. Sets are scoped "
+        "to this piece. Applying a set clears other restrictions; deleting a set does not change history.",
     ),
     "Screen Help": (
         "Read detailed help without leaving the current operation.",
@@ -217,8 +285,8 @@ BUTTON_HELP = {
                       "save the entire working list, apply an existing set or delete a set."),
     "Sort": ("Choose Fabric list sort priorities.", "Open the saved multi-field sort editor. "
              "Sort numbers numerically, not as formatted text."),
-    "Reset Selection": ("Show all saved fabric rectangles.", "Clear filters and selection-set "
-                        "restrictions, including the initial Available-only restriction."),
+    "Reset Selection": ("Show all rows in this list's scope.", "Clear filters and highlighted-record "
+                        "or saved-set restrictions without changing saved records."),
     "Refresh": ("Reload committed records.", "After confirmation for unsaved edits, reload the "
                 "working list using its current restrictions and sort."),
     "Backup Database": ("Create a verified backup at a new filename.", "Copy committed SQLite data "
@@ -246,6 +314,8 @@ BUTTON_HELP = {
                     "the working list, with other filters and highlight restrictions cleared."),
     "Delete Saved": ("Delete the selected set, keeping fabric.", "After confirmation, remove only "
                      "the saved selection snapshot. The current working list remains unchanged."),
+    "Reset Selection": ("Clear list filters and saved-set restrictions.", "Restore all rows in the "
+                        "current list's scope and clear filters and highlighted-row restrictions."),
 }
 
 SCREEN_FIELDS = {
@@ -257,11 +327,23 @@ SCREEN_FIELDS = {
     "Fabric": FABRIC_FIELDS,
     "Filter": FILTER_FIELDS,
     "DropDown": DROPDOWN_FORM_FIELDS,
+    "DropDown Filter": DROPDOWN_FILTER_FIELDS,
+    "DropDown Sort": tuple(field for index in range(1, len(DROPDOWN_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "DropDown Set": (Field("SavedSet"), Field("SetName")),
     "HelpText": HELP_FIELDS,
+    "HelpText Filter": HELP_FILTER_FIELDS,
+    "HelpText Sort": tuple(field for index in range(1, len(HELP_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "HelpText Set": (Field("SavedSet"), Field("SetName")),
     "Sort": tuple(field for index in range(1, len(SORT_FIELDS) + 1) for field in (
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
     "Set Selection": (Field("SavedSet"), Field("SetName")),
     "Add Item": (Field("ListItem"),),
+    "History Filter": HISTORY_FILTER_FIELDS,
+    "History Sort": tuple(field for index in range(1, len(HISTORY_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "History Set": (Field("SavedSet"), Field("SetName")),
     "History": (Field("HistoryValues"),),
     "Screen Help": (Field("HelpContent"),),
 }
@@ -280,14 +362,25 @@ SCREEN_BUTTONS = {
     "Error Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
-    "DropDown": ("Add Item", "Set Default"),
+    "DropDown": ("Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+                 "Add Item", "Set Default"),
     "Add Item": ("Add Item", "Cancel"),
-    "HelpText": ("Update", "Clear"),
+    "HelpText": ("Update", "Clear", "Select Highlighted", "Filter", "Set Selection",
+                 "Sort", "Reset Selection"),
     "Setup": ("Backup Database", "Restore Database"),
     "Filter": ("Apply", "Clear Fields", "Cancel"),
     "Sort": ("Apply", "Clear Fields", "Cancel"),
     "Set Selection": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
-    "History": ("Close",),
+    "History": ("Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Close"),
+    "DropDown Filter": ("Apply", "Clear Fields", "Cancel"),
+    "DropDown Sort": ("Apply", "Clear Fields", "Cancel"),
+    "DropDown Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
+    "HelpText Filter": ("Apply", "Clear Fields", "Cancel"),
+    "HelpText Sort": ("Apply", "Clear Fields", "Cancel"),
+    "HelpText Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
+    "History Filter": ("Apply", "Clear Fields", "Cancel"),
+    "History Sort": ("Apply", "Clear Fields", "Cancel"),
+    "History Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Screen Help": ("Close",),
 }
 COLUMN_HELP = {
@@ -320,6 +413,8 @@ def default_help():
                 hover, full = "Save the selected help pair.", (
                     "Save Hover Text and Full Text for the selected generated key. Keys stay "
                     "unchanged. New tooltip and F1 lookups use the saved text immediately.")
+            if screen == "HelpText" and button == "Set Selection":
+                hover, full = "Save or recall a HelpText list snapshot.", SCREEN_HELP["HelpText Set"][1]
             if screen == "ErrorMessage" and button in (
                     "Add", "Update", "Filter", "Sort", "Reset Selection"):
                 hover, full = {
@@ -332,13 +427,21 @@ def default_help():
                     "Reset Selection": ("Show all saved reference messages.", "Clear text filters "
                                         "and saved-set/highlight restrictions without deleting messages."),
                 }[button]
+            if screen in ("DropDown", "HelpText", "History") and button in (
+                    "Filter", "Set Selection", "Sort", "Reset Selection"):
+                if button == "Set Selection":
+                    hover, full = "Save or recall a working-list snapshot.", SCREEN_HELP[f"{screen} Set"][1]
+                elif button == "Reset Selection":
+                    hover, full = BUTTON_HELP[button]
+                else:
+                    hover, full = SCREEN_HELP[f"{screen} {button}"]
             if screen == "Error Set" and button == "Delete Saved":
                 hover, full = ("Delete only the selected message set.",
                                "After confirmation, remove the named snapshot. Messages and the "
                                "current working list remain unchanged.")
             rows[screen, f"Button:{button}"] = hover, full
         for field in SCREEN_FIELDS.get(screen, ()):
-            if screen in ("Sort", "Error Sort"):
+            if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort"):
                 pair = (("Choose a distinct field for this priority.",
                          "Choose a list column; earlier rows have higher priority. Leave unused "
                          "rows blank. ID is appended as a tie-breaker.") if field.name.startswith("SortField")
@@ -354,8 +457,16 @@ def default_help():
                 pair = (f"Search {field.label.lower()}.",
                         "Blank means no restriction. Match literal text anywhere in this field, "
                         "ignoring ASCII case. Nonblank fields are combined with AND.")
-            elif screen == "Error Set" and field.name == "SavedSet":
-                pair = ("Choose a saved message snapshot.", SCREEN_HELP["Error Set"][1])
+            elif screen == "DropDown Filter" and field.name == "Default":
+                pair = ("Show default choices or all other choices.", SCREEN_HELP[screen][1])
+            elif screen == "History Filter" and field.name == "Action":
+                pair = ("Match a saved inventory action.", SCREEN_HELP[screen][1])
+            elif screen == "History Filter" and field.name == "Values":
+                pair = ("Search saved Before and After values.", SCREEN_HELP[screen][1])
+            elif screen in ("DropDown Filter", "HelpText Filter", "History Filter"):
+                pair = (f"Filter by {field.label.lower()}.", SCREEN_HELP[screen][1])
+            elif screen.endswith(" Set") and field.name == "SavedSet":
+                pair = ("Choose a saved working-list snapshot.", SCREEN_HELP[screen][1])
             elif screen == "Filter" and field.name not in ("MinimumWidth", "MinimumLength"):
                 pair = (f"Filter fabric by {field.label.lower()}.",
                         "Blank means no restriction. " + (
@@ -373,6 +484,6 @@ def default_help():
                         "The fabric field whose dropdown list contains this item.")
             hover, full = pair
             if screen == "HelpText":
-                full += " Click this heading to toggle ascending/descending saved HelpText sorting."
+                full += " Use Sort to configure the saved multi-column HelpText order."
             rows[screen, f"Column:{column}"] = hover, full
     return rows

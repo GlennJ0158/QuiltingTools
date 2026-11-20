@@ -7,7 +7,10 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .helptext import HELP_COLUMNS, HELP_FIELDS, default_help
+from .helptext import (
+    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
+    HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, default_help,
+)
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
@@ -15,7 +18,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ERROR_SCHEMA = """
 CREATE TABLE ErrorMessage (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +35,21 @@ CREATE TABLE ErrorMessageMember (
     SelectionSetID INTEGER NOT NULL REFERENCES ErrorMessageSet(ID) ON DELETE CASCADE,
     ErrorMessageID INTEGER NOT NULL REFERENCES ErrorMessage(ID) ON DELETE CASCADE,
     PRIMARY KEY (SelectionSetID, ErrorMessageID)
+);
+"""
+WORKING_LIST_SCHEMA = """
+CREATE TABLE WorkingListSet (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    ScreenName TEXT NOT NULL CHECK(ScreenName IN ('DropDown', 'HelpText', 'History')),
+    ScopeName TEXT NOT NULL DEFAULT '',
+    SetName TEXT NOT NULL CHECK(length(trim(SetName)) BETWEEN 1 AND 120),
+    DateCreated TEXT NOT NULL,
+    UNIQUE(ScreenName, ScopeName, SetName COLLATE NOCASE)
+);
+CREATE TABLE WorkingListMember (
+    SelectionSetID INTEGER NOT NULL REFERENCES WorkingListSet(ID) ON DELETE CASCADE,
+    RecordID INTEGER NOT NULL,
+    PRIMARY KEY (SelectionSetID, RecordID)
 );
 """
 HELP_SCHEMA = """
@@ -108,7 +126,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA
+""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -121,16 +139,23 @@ TABLE_COLUMNS = {
     "ErrorMessage": ERROR_COLUMNS,
     "ErrorMessageSet": ("ID", "SetName", "DateCreated"),
     "ErrorMessageMember": ("SelectionSetID", "ErrorMessageID"),
+    "WorkingListSet": ("ID", "ScreenName", "ScopeName", "SetName", "DateCreated"),
+    "WorkingListMember": ("SelectionSetID", "RecordID"),
 }
 SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
+    "DropDownSort": (("ID", "FieldName", "ListItem", "Def", "Use"),
+                     (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc"))),
     "HelpTextSort": (HELP_COLUMNS, (("TableName", "asc"), ("FieldName", "asc"), ("ID", "asc"))),
     "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
+    "HistorySort": (("ID", "Action", "DateCreated"),
+                    (("ID", "desc"),)),
 }
 SELECTION_TABLES = {
     "Fabric": ("SelectionSet", "SelectionMember", "FabricPieceID"),
     "ErrorMessage": ("ErrorMessageSet", "ErrorMessageMember", "ErrorMessageID"),
 }
+WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History"))
 
 
 def now():
@@ -164,7 +189,7 @@ class Database:
                     self._seed_dropdowns()
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3)):
+                  and self.connection.execute("PRAGMA user_version").fetchone()[0] in (1, 2, 3, 4)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -183,9 +208,11 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
+                or version not in ((1, 2, 3, 4, SCHEMA_VERSION) if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version < 5 and table in ("WorkingListSet", "WorkingListMember"):
+                continue
             if version < 4 and table in ("ErrorMessage", "ErrorMessageSet", "ErrorMessageMember"):
                 continue
             if version == 1 and table == "Dropdown":
@@ -214,10 +241,12 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3):
+            if version not in (1, 2, 3, 4):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
-                      + (HELP_SCHEMA if version < 3 else "") + ERROR_SCHEMA)
+                      + (HELP_SCHEMA if version < 3 else "")
+                      + (ERROR_SCHEMA if version < 4 else "")
+                      + WORKING_LIST_SCHEMA)
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
@@ -229,7 +258,8 @@ class Database:
                     "WHERE MessageKey = ?", (*message[1:], message[0]),
                 )
             self._seed_help()
-            self._seed_errors()
+            if version < 4:
+                self._seed_errors()
             self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self.validate(self.connection)
             self.connection.commit()
@@ -324,10 +354,24 @@ class Database:
             raise FieldError("DatabaseFormat", "HelpText", detail=f"Missing help for {screen}/{name}.")
         return tuple(row)
 
-    def help_rows(self):
-        order = self.load_sort("HelpTextSort")
+    def help_rows(self, filters=None, selected_ids=None, sort=None):
+        values = {field.name: "" for field in HELP_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(HELP_FILTER_FIELDS, values)
+        order = self.load_sort("HelpTextSort") if sort is None else normalize_sort(sort, HELP_COLUMNS)
+        clauses, args = [], []
+        for name, value in clean.items():
+            if value:
+                clauses.append(f'instr(lower("{name}"), lower(?)) > 0')
+                args.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
-        return [dict(row) for row in self.connection.execute(f"SELECT * FROM HelpText ORDER BY {sql_order}")]
+        rows = [dict(row) for row in self.connection.execute(
+            f"SELECT * FROM HelpText{where} ORDER BY {sql_order}", args,
+        )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
 
     def save_help(self, help_id, values, previous):
         clean = validate_fields(HELP_FIELDS, values)
@@ -383,13 +427,31 @@ class Database:
         with self.connection:
             return self._dropdown_item(name, value)
 
-    def dropdown_rows(self, name):
+    def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None):
         if name not in DROPDOWN_FIELDS:
             raise FieldError("Choice", "FieldName")
-        return [dict(row) for row in self.connection.execute(
-            "SELECT * FROM Dropdown WHERE TableName = 'FabricPiece' AND FieldName = ? AND Use = 1 "
-            "ORDER BY Def DESC, ListItem COLLATE NOCASE, ID", (name,),
+        values = {field.name: "" for field in DROPDOWN_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(DROPDOWN_FILTER_FIELDS, values)
+        order = self.load_sort("DropDownSort") if sort is None else normalize_sort(sort, DROPDOWN_COLUMNS)
+        clauses, args = ["FieldName = ?", "Use = 1"], [name]
+        if clean["ListItem"]:
+            clauses.append("instr(lower(ListItem), lower(?)) > 0")
+            args.append(clean["ListItem"])
+        if clean["Default"]:
+            clauses.append("Def = ?")
+            args.append(int(clean["Default"] == "Yes"))
+        sql_order = ", ".join(
+            f'"{field}"{" COLLATE NOCASE" if field in ("FieldName", "ListItem") else ""} {direction}'
+            for field, direction in order
+        )
+        rows = [dict(row) for row in self.connection.execute(
+            "SELECT * FROM Dropdown WHERE TableName = 'FabricPiece' AND "
+            + " AND ".join(clauses) + f" ORDER BY {sql_order}", args,
         )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
 
     def dropdown_default(self, name):
         rows = self.dropdown_rows(name)
@@ -502,13 +564,84 @@ class Database:
             rows = [row for row in rows if row["ID"] in allowed]
         return rows
 
-    def history(self, piece_id):
+    def history(self, piece_id, filters=None, selected_ids=None, sort=None):
         self.get_piece(piece_id)
-        return [dict(row) for row in self.connection.execute(
-            "SELECT * FROM FabricHistory WHERE FabricPieceID = ? ORDER BY ID DESC", (piece_id,),
+        values = {field.name: "" for field in HISTORY_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(HISTORY_FILTER_FIELDS, values)
+        order = self.load_sort("HistorySort") if sort is None else normalize_sort(sort, HISTORY_COLUMNS)
+        clauses, args = ["FabricPieceID = ?"], [piece_id]
+        if clean["Action"]:
+            clauses.append("Action = ?")
+            args.append(clean["Action"])
+        if clean["DateCreated"]:
+            clauses.append("instr(lower(DateCreated), lower(?)) > 0")
+            args.append(clean["DateCreated"])
+        if clean["Values"]:
+            clauses.append(
+                "instr(lower(coalesce(BeforeValues, '') || ' ' || coalesce(AfterValues, '')), lower(?)) > 0"
+            )
+            args.append(clean["Values"])
+        sql_order = ", ".join(
+            f'"{field}" COLLATE NOCASE {direction}' for field, direction in order
+        )
+        rows = [dict(row) for row in self.connection.execute(
+            "SELECT * FROM FabricHistory WHERE " + " AND ".join(clauses) + f" ORDER BY {sql_order}", args,
         )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
 
-    def save_set(self, name, ids, screen="Fabric"):
+    def _working_list_scope(self, screen, scope):
+        if screen not in WORKING_LIST_SCREENS:
+            raise FieldError("Choice", "Screen")
+        if screen == "DropDown":
+            if scope not in DROPDOWN_FIELDS:
+                raise FieldError("Choice", "FieldName")
+            return scope
+        if screen == "History":
+            try:
+                piece_id = int(scope)
+            except (TypeError, ValueError) as error:
+                raise FieldError("Choice", "FabricPieceID") from error
+            self.get_piece(piece_id)
+            return str(piece_id)
+        if scope not in (None, ""):
+            raise FieldError("Choice", "Screen")
+        return ""
+
+    def _working_list_rows(self, screen, scope):
+        if screen == "DropDown":
+            return self.dropdown_rows(scope)
+        if screen == "History":
+            return self.history(int(scope))
+        return self.help_rows()
+
+    def save_set(self, name, ids, screen="Fabric", scope=None):
+        if screen in WORKING_LIST_SCREENS:
+            scope_name = self._working_list_scope(screen, scope)
+            name = validate_fields((Field("SetName", required=True),), {"SetName": name})["SetName"]
+            ids = sorted(set(ids))
+            if not ids:
+                raise FieldError("EmptySet", "SetName")
+            valid_ids = {row["ID"] for row in self._working_list_rows(screen, scope_name)}
+            if any(record_id not in valid_ids for record_id in ids):
+                raise FieldError("MissingRecord", screen)
+            with self.connection:
+                if self.connection.execute(
+                    "SELECT 1 FROM WorkingListSet WHERE ScreenName = ? AND ScopeName = ? "
+                    "AND SetName = ? COLLATE NOCASE", (screen, scope_name, name),
+                ).fetchone():
+                    raise FieldError("DuplicateSet", "SetName")
+                cursor = self.connection.execute(
+                    "INSERT INTO WorkingListSet (ScreenName, ScopeName, SetName, DateCreated) "
+                    "VALUES (?, ?, ?, ?)", (screen, scope_name, name, now()),
+                )
+                self.connection.executemany(
+                    "INSERT INTO WorkingListMember (SelectionSetID, RecordID) VALUES (?, ?)",
+                    ((cursor.lastrowid, record_id) for record_id in ids),
+                )
+                return cursor.lastrowid
         table, members, column = SELECTION_TABLES[screen]
         name = validate_fields((Field("SetName", required=True),), {"SetName": name})["SetName"]
         ids = sorted(set(ids))
@@ -529,7 +662,16 @@ class Database:
             )
             return cursor.lastrowid
 
-    def sets(self, screen="Fabric"):
+    def sets(self, screen="Fabric", scope=None):
+        if screen in WORKING_LIST_SCREENS:
+            scope_name = self._working_list_scope(screen, scope)
+            return [dict(row) for row in self.connection.execute(
+                "SELECT s.ID, s.SetName, count(m.RecordID) AS RecordCount "
+                "FROM WorkingListSet s LEFT JOIN WorkingListMember m ON s.ID = m.SelectionSetID "
+                "WHERE s.ScreenName = ? AND s.ScopeName = ? "
+                "GROUP BY s.ID ORDER BY s.SetName COLLATE NOCASE, s.ID",
+                (screen, scope_name),
+            )]
         table, members, column = SELECTION_TABLES[screen]
         return [dict(row) for row in self.connection.execute(
             f"SELECT s.ID, s.SetName, count(m.{column}) AS RecordCount "
@@ -537,7 +679,18 @@ class Database:
             "GROUP BY s.ID ORDER BY s.SetName COLLATE NOCASE, s.ID",
         )]
 
-    def set_members(self, set_id, screen="Fabric"):
+    def set_members(self, set_id, screen="Fabric", scope=None):
+        if screen in WORKING_LIST_SCREENS:
+            scope_name = self._working_list_scope(screen, scope)
+            if self.connection.execute(
+                "SELECT 1 FROM WorkingListSet WHERE ID = ? AND ScreenName = ? AND ScopeName = ?",
+                (set_id, screen, scope_name),
+            ).fetchone() is None:
+                raise FieldError("MissingRecord", "SelectionSetID")
+            return [row[0] for row in self.connection.execute(
+                "SELECT RecordID FROM WorkingListMember WHERE SelectionSetID = ? ORDER BY RecordID",
+                (set_id,),
+            )]
         table, members, column = SELECTION_TABLES[screen]
         if self.connection.execute(f"SELECT 1 FROM {table} WHERE ID = ?", (set_id,)).fetchone() is None:
             raise FieldError("MissingRecord", "SelectionSetID")
@@ -546,7 +699,17 @@ class Database:
             (set_id,),
         )]
 
-    def delete_set(self, set_id, screen="Fabric"):
+    def delete_set(self, set_id, screen="Fabric", scope=None):
+        if screen in WORKING_LIST_SCREENS:
+            scope_name = self._working_list_scope(screen, scope)
+            with self.connection:
+                cursor = self.connection.execute(
+                    "DELETE FROM WorkingListSet WHERE ID = ? AND ScreenName = ? AND ScopeName = ?",
+                    (set_id, screen, scope_name),
+                )
+                if cursor.rowcount != 1:
+                    raise FieldError("MissingRecord", "SelectionSetID")
+            return
         table, _, _ = SELECTION_TABLES[screen]
         with self.connection:
             cursor = self.connection.execute(f"DELETE FROM {table} WHERE ID = ?", (set_id,))

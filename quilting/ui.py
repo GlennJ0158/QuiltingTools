@@ -11,7 +11,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION
-from .database import Database
+from .database import (
+    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_FILTER_FIELDS, HISTORY_FILTER_FIELDS,
+    HISTORY_COLUMNS, Database,
+)
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import HELP_COLUMNS, HELP_FIELDS, NAVIGATION
 from .model import (
@@ -545,8 +548,33 @@ class Application:
     def watch_dialog(self, window, form):
         self.dialog_forms[window] = form, form.values()
 
-    def open_filter(self):
-        errors = self.current == "ErrorMessage"
+    def open_filter(self, screen=None, state=None, scope=None, refresh=None):
+        screen = screen or self.current
+        if screen in ("DropDown", "HelpText", "History"):
+            state = self.working_list_state(screen, state)
+            fields = self.working_list_fields(screen)
+            title = f"Filter {screen}"
+            window = self.dialog(title, f"{screen} Filter")
+            form = Form(window, fields, columns=1)
+            form.pack(fill="both", expand=True)
+            form.assign(state["filters"])
+            self.watch_dialog(window, form)
+            actions = ttk.Frame(window, padding=8)
+            actions.pack(fill="x")
+
+            def apply_working_list():
+                values = validate_fields(fields, form.values())
+                if self.allow_working_list_change(screen):
+                    state["filters"] = values
+                    window.destroy()
+                    (refresh or {"DropDown": self.refresh_dropdowns,
+                                 "HelpText": self.refresh_help}[screen])()
+
+            self.button(actions, "Apply", apply_working_list)
+            self.button(actions, "Clear Fields", form.defaults)
+            self.button(actions, "Cancel", window.destroy)
+            return
+        errors = screen == "ErrorMessage"
         fields = ERROR_FILTER_FIELDS if errors else FILTER_FIELDS
         window = self.dialog("Filter Error Messages" if errors else "Filter Fabric Inventory",
                              "Error Filter" if errors else "Filter")
@@ -594,6 +622,86 @@ class Application:
         self.button(actions, "Cancel", window.destroy)
         form.focus_field("ListItem")
 
+    def new_list_state(self, sort=None, fields=()):
+        return {
+            "filters": {field.name: "" for field in fields},
+            "selected_ids": None,
+            "selection_description": "",
+            "sort": sort,
+        }
+
+    @staticmethod
+    def list_context(state):
+        context = f"; {state['selection_description']}" if state["selection_description"] else ""
+        filters = [f"{caption(name)}={value}" for name, value in state["filters"].items() if value]
+        if filters:
+            context += "; Filter: " + ", ".join(filters)
+        return context
+
+    def add_working_list_tools(self, parent, screen, state=None, scope=None, refresh=None, rows=None):
+        self.button(parent, "Select Highlighted", lambda: self.select_working_list(
+            screen, state, scope, refresh))
+        self.button(parent, "Filter", lambda: self.open_filter(screen, state, scope, refresh))
+        self.button(parent, "Set Selection", lambda: self.open_sets(
+            screen, state, scope, refresh, rows))
+        self.button(parent, "Sort", lambda: self.open_sort(screen, state, refresh))
+        self.button(parent, "Reset Selection", lambda: self.reset_working_list(
+            screen, state, refresh))
+
+    def working_list_state(self, screen, state=None):
+        if state is not None:
+            return state
+        if screen == "DropDown":
+            return self.dropdown_states[self.dropdown_field()]
+        if screen == "HelpText":
+            return self.help_state
+        raise FieldError("Choice", "Screen")
+
+    def working_list_fields(self, screen):
+        return {
+            "DropDown": DROPDOWN_FILTER_FIELDS,
+            "HelpText": HELP_FILTER_FIELDS,
+            "History": HISTORY_FILTER_FIELDS,
+        }[screen]
+
+    def working_list_sort(self, screen, state):
+        if state["sort"] is None:
+            return {
+                "DropDown": self.db.load_sort("DropDownSort"),
+                "HelpText": self.db.load_sort("HelpTextSort"),
+                "History": self.db.load_sort("HistorySort"),
+            }[screen]
+        return state["sort"]
+
+    def allow_working_list_change(self, screen):
+        if screen == "HelpText":
+            return self.help_form.values() == self.help_initial or messagebox.askyesno(
+                "Unsaved Changes", "Discard unsaved help text?", parent=self.root.grab_current() or self.root,
+            )
+        return True
+
+    def select_working_list(self, screen, state=None, scope=None, refresh=None):
+        state = self.working_list_state(screen, state)
+        listing = {"DropDown": self.dropdown_list, "HelpText": self.help_list}.get(screen)
+        if screen == "History" and refresh is None:
+            raise FieldError("Choice", "Screen")
+        selected = listing.tree.selection() if listing is not None else state["tree"].selection()
+        if not selected:
+            raise FieldError("NoHighlight", screen)
+        if self.allow_working_list_change(screen):
+            state["selected_ids"] = [int(item) for item in selected]
+            state["selection_description"] = "Highlighted-record restriction"
+            (refresh or {"DropDown": self.refresh_dropdowns, "HelpText": self.refresh_help}[screen])()
+
+    def reset_working_list(self, screen, state=None, refresh=None):
+        state = self.working_list_state(screen, state)
+        if self.allow_working_list_change(screen):
+            state["filters"] = {field.name: "" for field in self.working_list_fields(screen)}
+            state["selected_ids"] = None
+            state["selection_description"] = ""
+            (refresh or {"DropDown": self.refresh_dropdowns,
+                         "HelpText": self.refresh_help}[screen])()
+
     def build_dropdowns(self):
         window = self.dropdown_page
         ttk.Label(window, text="DropDown", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
@@ -608,12 +716,19 @@ class Application:
         ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
                   "add form. Defined grain, print and status choices cannot be extended.",
                   wraplength=720, padding=8).pack(anchor="w")
+        tools = ttk.Frame(window, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(tools, "DropDown")
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
         self.dropdown_list = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
         self.dropdown_list.pack(fill="both", expand=True)
         self.button(actions, "Add Item", self.add_dropdown)
         self.button(actions, "Set Default", self.set_dropdown_default)
+        self.dropdown_states = {
+            name: self.new_list_state(self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS)
+            for name in self.dropdown_names.values()
+        }
         self.dropdown_form.widgets["FieldName"].bind(
             "<<ComboboxSelected>>", self.command(self.refresh_dropdowns))
         self.dropdown_initial = self.dropdown_form.values()
@@ -624,11 +739,15 @@ class Application:
         return self.dropdown_names[values["FieldName"]]
 
     def refresh_dropdowns(self):
-        rows = self.db.dropdown_rows(self.dropdown_field())
+        name = self.dropdown_field()
+        state = self.dropdown_states[name]
+        order = self.working_list_sort("DropDown", state)
+        rows = self.db.dropdown_rows(name, state["filters"], state["selected_ids"], order)
         for row in rows:
             row["FieldName"] = caption(row["FieldName"])
+        context = self.list_context(state)
         self.dropdown_list.fill(
-            rows, "dropdown records", (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc")))
+            rows, "dropdown records", order, context)
         self.form.refresh_choices()
         self.dropdown_initial["FieldName"] = self.dropdown_form.values()["FieldName"]
 
@@ -651,6 +770,12 @@ class Application:
         self.help_form.pack(fill="x")
         for name in ("TableName", "FieldName"):
             self.help_form.widgets[name].configure(state="readonly")
+        self.help_state = self.new_list_state(
+            self.db.load_sort("HelpTextSort"), HELP_FILTER_FIELDS,
+        )
+        tools = ttk.Frame(self.help_page, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(tools, "HelpText")
         actions = ttk.Frame(self.help_page, padding=8)
         actions.pack(fill="x")
         self.help_update = self.button(actions, "Update", self.update_help)
@@ -691,12 +816,18 @@ class Application:
 
     def refresh_help(self):
         keep = self.help_id
-        self.help_rows = self.db.help_rows()
-        self.help_list.fill(self.help_rows, "help records", self.db.load_sort("HelpTextSort"))
+        self.help_rows = self.db.help_rows(
+            self.help_state["filters"], self.help_state["selected_ids"], self.help_state["sort"],
+        )
+        self.help_list.fill(
+            self.help_rows, "help records", self.help_state["sort"], self.list_context(self.help_state),
+        )
         self.help_selection = ()
-        if keep is not None:
+        if keep is not None and self.help_list.tree.exists(str(keep)):
             self.help_list.tree.selection_set(str(keep))
             self.on_help_select()
+        else:
+            self.clear_help()
 
     def update_help(self):
         if self.help_id is None:
@@ -711,6 +842,7 @@ class Application:
         order = self.db.load_sort("HelpTextSort")
         direction = "desc" if order[0] == (name, "asc") else "asc"
         self.db.save_sort(((name, direction),), "HelpTextSort")
+        self.help_state["sort"] = self.db.load_sort("HelpTextSort")
         self.help_form.assign(self.help_initial)
         self.refresh_help()
 
@@ -882,8 +1014,55 @@ class Application:
             raise FieldError("Database", "Print",
                              detail=f"No browser opened. Open {path} manually and choose Print.")
 
-    def open_sort(self):
-        errors = self.current == "ErrorMessage"
+    def open_sort(self, screen=None, state=None, refresh=None):
+        screen = screen or self.current
+        if screen in ("DropDown", "HelpText", "History"):
+            state = self.working_list_state(screen, state)
+            columns = {
+                "DropDown": DROPDOWN_COLUMNS,
+                "HelpText": HELP_COLUMNS,
+                "History": HISTORY_COLUMNS,
+            }[screen]
+            sort_key = {"DropDown": "DropDownSort", "HelpText": "HelpTextSort",
+                        "History": "HistorySort"}[screen]
+            order = self.working_list_sort(screen, state)
+            title = f"Sort {screen}"
+            window = self.dialog(title, f"{screen} Sort")
+            fields = []
+            for index in range(1, len(columns) + 1):
+                fields.extend((
+                    Field(f"SortField{index}", "choice", choices=("", *map(caption, columns))),
+                    Field(f"Direction{index}", "choice", choices=("asc", "desc"), default="asc"),
+                ))
+            form = Form(window, fields)
+            form.pack(fill="both", expand=True)
+            lookup = {caption(name): name for name in columns}
+            for index, (name, direction) in enumerate(order, 1):
+                form.variables[f"SortField{index}"].set(caption(name))
+                form.variables[f"Direction{index}"].set(direction)
+            self.watch_dialog(window, form)
+            actions = ttk.Frame(window, padding=8)
+            actions.pack(fill="x")
+
+            def apply_working_sort():
+                values = validate_fields(fields, form.values())
+                requested = [
+                    (lookup[values[f"SortField{index}"]], values[f"Direction{index}"])
+                    for index in range(1, len(columns) + 1) if values[f"SortField{index}"]
+                ]
+                order = normalize_sort(requested, columns)
+                if self.allow_working_list_change(screen):
+                    self.db.save_sort(order, sort_key)
+                    state["sort"] = order
+                    window.destroy()
+                    (refresh or {"DropDown": self.refresh_dropdowns,
+                                 "HelpText": self.refresh_help}[screen])()
+
+            self.button(actions, "Apply", apply_working_sort)
+            self.button(actions, "Clear Fields", form.defaults)
+            self.button(actions, "Cancel", window.destroy)
+            return
+        errors = screen == "ErrorMessage"
         columns = ERROR_COLUMNS if errors else SORT_FIELDS
         window = self.dialog("Sort Error Messages" if errors else "Sort Fabric Inventory",
                              "Error Sort" if errors else "Sort")
@@ -923,9 +1102,74 @@ class Application:
         self.button(actions, "Clear Fields", form.defaults)
         self.button(actions, "Cancel", window.destroy)
 
-    def open_sets(self):
-        errors = self.current == "ErrorMessage"
-        screen = "ErrorMessage" if errors else "Fabric"
+    def open_sets(self, screen=None, state=None, scope=None, refresh=None, rows=None):
+        screen = screen or self.current
+        if screen in ("DropDown", "HelpText", "History"):
+            state = self.working_list_state(screen, state)
+            refresh = refresh or {"DropDown": self.refresh_dropdowns,
+                                  "HelpText": self.refresh_help}.get(screen)
+            if screen == "DropDown":
+                scope = scope or self.dropdown_field()
+                list_rows = rows or (lambda: self.db.dropdown_rows(
+                    scope, state["filters"], state["selected_ids"], state["sort"],
+                ))
+            elif screen == "HelpText":
+                scope = None
+                list_rows = rows or (lambda: self.db.help_rows(
+                    state["filters"], state["selected_ids"], state["sort"],
+                ))
+            else:
+                scope = str(scope)
+                list_rows = rows
+            choices = {
+                f"{row['SetName']} ({row['RecordCount']} records; ID {row['ID']})": row["ID"]
+                for row in self.db.sets(screen, scope)
+            }
+            title = f"{screen} Selection Sets"
+            window = self.dialog(title, f"{screen} Set")
+            fields = (Field("SavedSet", "choice", choices=("", *choices)), Field("SetName"))
+            form = Form(window, fields, columns=1)
+            form.pack(fill="x")
+            self.watch_dialog(window, form)
+            ttk.Label(window, text=f"{len(list_rows())} records in the current working list. "
+                      "Save Current saves all of them.", padding=8).pack(anchor="w")
+            actions = ttk.Frame(window, padding=8)
+            actions.pack(fill="x")
+
+            def chosen():
+                values = validate_fields(fields, form.values())
+                if not values["SavedSet"]:
+                    raise FieldError("Required", "SavedSet")
+                return choices[values["SavedSet"]]
+
+            def save_working_set():
+                self.db.save_set(form.values()["SetName"], [row["ID"] for row in list_rows()],
+                                 screen, scope)
+                window.destroy()
+
+            def apply_working_set():
+                set_id = chosen()
+                ids = self.db.set_members(set_id, screen, scope)
+                if self.allow_working_list_change(screen):
+                    state["filters"] = {field.name: "" for field in self.working_list_fields(screen)}
+                    state["selected_ids"] = ids
+                    state["selection_description"] = f"Selection set ID {set_id}"
+                    window.destroy()
+                    refresh()
+
+            def delete_working_set():
+                set_id = chosen()
+                if messagebox.askyesno("Delete Selection Set", "Delete this set? Source records are kept.",
+                                       parent=window):
+                    self.db.delete_set(set_id, screen, scope)
+                    window.destroy()
+
+            self.button(actions, "Save Current", save_working_set)
+            self.button(actions, "Apply Saved", apply_working_set)
+            self.button(actions, "Delete Saved", delete_working_set)
+            self.button(actions, "Cancel", window.destroy)
+            return
+        errors = screen == "ErrorMessage"
         window = self.dialog("Error Message Sets" if errors else "Set Selection",
                              "Error Set" if errors else "Set Selection")
         rows = self.db.sets(screen)
@@ -983,18 +1227,44 @@ class Application:
     def open_history(self):
         if self.piece_id is None:
             raise FieldError("OneRecord", "Fabric Inventory")
-        rows = self.db.history(self.piece_id)
-        window = self.dialog(f"Fabric Piece {self.piece_id} - History", "History")
+        piece_id = self.piece_id
+        window = self.dialog(f"Fabric Piece {piece_id} - History", "History")
         window.geometry("950x600")
+        state = self.new_list_state(self.db.load_sort("HistorySort"), HISTORY_FILTER_FIELDS)
         listing = RecordList(window, ("ID", "Action", "DateCreated"))
+        state["tree"] = listing.tree
+        rows = []
+
+        def refresh_history():
+            nonlocal rows
+            keep = listing.tree.selection()
+            rows = self.db.history(
+                piece_id, state["filters"], state["selected_ids"], state["sort"],
+            )
+            listing.fill(rows, "history records", state["sort"], self.list_context(state))
+            visible = set(listing.tree.get_children())
+            kept = tuple(item for item in keep if item in visible)
+            if kept:
+                listing.tree.selection_set(kept)
+                listing.tree.see(kept[0])
+            else:
+                text.configure(state="normal")
+                text.delete("1.0", "end")
+                text.configure(state="disabled")
+
+        tools = ttk.Frame(window, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(
+            tools, "History", state, piece_id, refresh_history, lambda: rows,
+        )
         listing.pack(fill="both", expand=True)
-        listing.fill(rows, "history records", (("ID", "desc"),))
         text = tk.Text(window, height=14, wrap="word", state="disabled")
         text.pack(fill="both", expand=True, padx=8, pady=8)
         scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
         scroll.pack(side="right", fill="y")
         text.configure(yscrollcommand=scroll.set)
         self.attach_help(text, "HistoryValues")
+        refresh_history()
 
         def show():
             selected = listing.tree.selection()
