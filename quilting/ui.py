@@ -1,6 +1,7 @@
 """Tkinter list/detail screens with shared control and field-binding conventions."""
 
 import json
+import re
 import sqlite3
 import traceback
 import tkinter as tk
@@ -11,15 +12,22 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION
+from .backs import (
+    INCH, PALETTE, escaped_legend, generate_layouts, layout_from_record, layout_svg,
+    palette_suggestion, ratio_label,
+)
 from .database import (
     DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_FILTER_FIELDS, HISTORY_FILTER_FIELDS,
     HISTORY_COLUMNS, Database,
 )
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
-from .helptext import HELP_COLUMNS, HELP_FIELDS, NAVIGATION
+from .helptext import (
+    BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
+)
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
-    SORT_FIELDS, Field, FieldError, caption, display_measurement, normalize_sort, validate_fields,
+    SORT_FIELDS, Field, FieldError, caption, display_measurement, measurement, normalize_sort,
+    validate_fields,
 )
 
 
@@ -61,6 +69,13 @@ class ToolTip:
 def display_timestamp(value):
     """Keep the date while displaying local time only to the minute."""
     return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def nonnegative_measurement(value, field):
+    text = value.strip()
+    if re.fullmatch(r"0(?:\.0{1,6})?", text):
+        return 0
+    return measurement(text, field)
 
 
 class Form(ttk.Frame):
@@ -213,7 +228,9 @@ class RecordList(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             values = [
-                display_measurement(row[name]) if name in ("UsableWidth", "UsableLength")
+                display_measurement(row[name]) if name in (
+                    "UsableWidth", "UsableLength", "BackWidth", "BackLength",
+                )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else row[name] for name in self.columns
             ]
@@ -250,10 +267,11 @@ class Application:
         body = ttk.Frame(self.pages)
         self.inventory_page = body
         self.dropdown_page = ttk.Frame(self.pages, padding=8)
+        self.backs_page = ttk.Frame(self.pages, padding=8)
         self.help_page = ttk.Frame(self.pages, padding=8)
         self.error_page = ttk.Frame(self.pages, padding=8)
         self.setup_page = ttk.Frame(self.pages, padding=12)
-        self.screens = {"Fabric": body, "DropDown": self.dropdown_page,
+        self.screens = {"Fabric": body, "Quilt Backs": self.backs_page, "DropDown": self.dropdown_page,
                         "HelpText": self.help_page, "ErrorMessage": self.error_page, "Setup": self.setup_page}
         for name, page in self.screens.items():
             page.help_screen = name
@@ -302,6 +320,7 @@ class Application:
         self.build_dropdowns()
         self.build_helptext()
         self.build_errors()
+        self.build_backs()
 
     def context(self, widget):
         while widget is not None:
@@ -341,6 +360,8 @@ class Application:
             forms.append((self.form, self.initial_values))
         elif self.current == "DropDown":
             forms.append((self.dropdown_form, self.dropdown_initial))
+        elif self.current == "Quilt Backs":
+            forms.append((self.back_form, self.back_initial))
         elif self.current == "HelpText":
             forms.append((self.help_form, self.help_initial))
         elif self.current == "ErrorMessage":
@@ -372,6 +393,8 @@ class Application:
             self.refresh()
         elif name == "DropDown":
             self.refresh_dropdowns()
+        elif name == "Quilt Backs":
+            self.refresh_backs()
         elif name == "HelpText":
             self.refresh_help()
         elif name == "ErrorMessage":
@@ -880,6 +903,347 @@ class Application:
         self.error_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_error_select))
         self.clear_error()
         self.refresh_errors()
+
+    def build_backs(self):
+        ttk.Label(self.backs_page, text="Quilt Backs",
+                  font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.backs_page,
+            text="Plan rectangular panels from available pieces. Margin is equal on all sides; "
+                 "one seam allowance applies to every join. Drafts do not change inventory.",
+            wraplength=1100,
+        ).pack(anchor="w")
+        self.back_form = Form(
+            self.backs_page, SCREEN_FIELDS["Quilt Backs"], columns=5,
+        )
+        self.back_form.pack(fill="x")
+        self.back_initial = self.back_form.values()
+        stock_actions = ttk.Frame(self.backs_page, padding=(8, 0))
+        stock_actions.pack(fill="x")
+        ttk.Label(stock_actions, text="Available source rectangles").pack(side="left", padx=(0, 10))
+        self.button(stock_actions, "Set Sketch Color", self.set_back_palette)
+        self.button(stock_actions, "Refresh Fabric", self.refresh_back_stock)
+        self.back_stock = RecordList(self.backs_page, LIST_COLUMNS)
+        self.back_stock.tree.configure(height=5)
+        self.back_stock.pack(fill="both", expand=True)
+        actions = ttk.Frame(self.backs_page, padding=(8, 0))
+        actions.pack(fill="x")
+        self.button(actions, "Generate Plans", self.generate_back_plans)
+        self.button(actions, "Preview Sketch", self.preview_back)
+        self.button(actions, "Save Draft", self.save_back_draft)
+        self.back_print_button = self.button(actions, "Print Plan", self.print_back_plan)
+        self.back_candidates = RecordList(self.backs_page, BACK_LAYOUT_COLUMNS)
+        self.back_candidates.tree.configure(height=4)
+        for column in ("Parts", "Seams", "FabricArea"):
+            self.back_candidates.tree.column(column, anchor="e")
+        self.back_candidates.pack(fill="both", expand=True)
+        self.back_candidates.tree.bind(
+            "<<TreeviewSelect>>", self.command(self.on_back_candidate_select),
+        )
+        ttk.Label(self.backs_page, text="Saved plans").pack(anchor="w", padx=8)
+        self.back_list = RecordList(
+            self.backs_page, ("ID", "BackName", "BackWidth", "BackLength", "Status", "DateModified"),
+        )
+        self.back_list.tree.configure(height=3)
+        self.back_list.pack(fill="both", expand=True)
+        self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
+        final_actions = ttk.Frame(self.backs_page, padding=(8, 0))
+        final_actions.pack(fill="x")
+        self.back_confirm_button = self.button(final_actions, "Confirm Cuts", self.open_back_cut)
+        self.back_assembled_button = self.button(final_actions, "Mark Assembled", self.mark_back_assembled)
+        self.back_status = ttk.Label(self.backs_page, text="Choose available rectangles to generate plans.")
+        self.back_status.pack(fill="x", padx=8, pady=4)
+        self.back_layouts = []
+        self.back_selected_layout = None
+        self.back_selected_id = None
+        self.back_palette = {}
+        self.back_initial = self.back_form.values()
+        self.refresh_backs()
+        self.back_confirm_button.state(["disabled"])
+        self.back_assembled_button.state(["disabled"])
+
+    def refresh_back_stock(self):
+        filters = {field.name: "" for field in FILTER_FIELDS}
+        filters["Status"] = "Available"
+        rows = self.db.pieces(filters, sort=self.sort)
+        self.back_stock.fill(rows, "available fabric rectangles", self.sort)
+
+    def refresh_backs(self, prefer_id=None):
+        self.refresh_back_stock()
+        rows = self.db.quilt_backs()
+        self.back_list.fill(rows, "saved quilt backs", (("DateModified", "desc"), ("ID", "desc")))
+        if prefer_id is not None and self.back_list.tree.exists(str(prefer_id)):
+            self.back_list.tree.selection_set(str(prefer_id))
+            self.back_list.tree.see(str(prefer_id))
+            self.on_back_select()
+
+    def generate_back_plans(self):
+        selected = self.back_stock.tree.selection()
+        if not selected:
+            raise FieldError("NoHighlight", "FabricPiece")
+        values = self.back_form.values()
+        quilt_width = measurement(values["QuiltWidth"], "QuiltWidth")
+        quilt_length = measurement(values["QuiltLength"], "QuiltLength")
+        margin = nonnegative_measurement(values["Margin"], "Margin") if values["Margin"] else 0
+        seam_allowance = (
+            nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
+            if values["SeamAllowance"] else 0
+        )
+        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected]
+        self.back_selected_id = None
+        self.back_list.tree.selection_remove(self.back_list.tree.selection())
+        self.back_confirm_button.state(["disabled"])
+        self.back_assembled_button.state(["disabled"])
+        self.back_layouts = generate_layouts(
+            pieces, quilt_width, quilt_length, margin, seam_allowance, self.back_palette,
+        )
+        self.back_candidates.fill([
+            {
+                "ID": index,
+                "Layout": layout.direction.title(),
+                "Parts": len(layout.panels),
+                "Seams": layout.seam_count,
+                "Grain": (
+                    "Unknown" if layout.grain_unknown else
+                    "Consistent" if layout.grain_consistent else "Mixed"
+                ),
+                "Minimum": ratio_label(layout.ratio_tier),
+                "FabricArea": f"{layout.stock_area / (INCH * INCH):,.1f} sq in",
+            }
+            for index, layout in enumerate(self.back_layouts, 1)
+        ], "ranked layout plans", (("ID", "asc"),))
+        self.back_selected_layout = self.back_layouts[0] if self.back_layouts else None
+        if self.back_layouts:
+            self.back_candidates.tree.selection_set("1")
+            self.back_status.configure(
+                text=f"{len(self.back_layouts)} candidate plans. "
+                     f"Best: {ratio_label(self.back_layouts[0].ratio_tier)}; "
+                     f"{len(self.back_layouts[0].panels)} panels; "
+                     f"{'grain consistent' if self.back_layouts[0].grain_consistent else 'grain differs'}."
+            )
+        else:
+            self.back_status.configure(text="No feasible plan from the selected available rectangles.")
+
+    def on_back_candidate_select(self):
+        selected = self.back_candidates.tree.selection()
+        if len(selected) == 1:
+            index = int(selected[0]) - 1
+            if 0 <= index < len(self.back_layouts):
+                self.back_selected_layout = self.back_layouts[index]
+
+    def set_back_palette(self):
+        selected = self.back_stock.tree.selection()
+        if len(selected) != 1:
+            raise FieldError("OneRecord", "FabricPiece")
+        piece = self.db.get_piece(int(selected[0]))
+        initial = self.back_palette.get(piece["ID"], palette_suggestion(piece["Color"]))
+        window = self.dialog("Set Sketch Color", "Quilt Backs")
+        window.geometry("480x180")
+        ttk.Label(
+            window,
+            text=f"{piece['FabricName']} — {piece['Color'] or '(no color recorded)'}",
+            padding=10,
+        ).pack(anchor="w")
+        color = tk.StringVar(master=window, value=initial)
+        ttk.Combobox(
+            window, textvariable=color, values=tuple(PALETTE), state="readonly",
+        ).pack(anchor="w", padx=10, pady=8)
+        self.button(window, "Apply", lambda: self.apply_back_palette(window, piece["ID"], color.get()))
+        self.button(window, "Cancel", window.destroy)
+
+    def apply_back_palette(self, window, piece_id, color):
+        if color not in PALETTE:
+            raise FieldError("Choice", "PaletteColor")
+        self.back_palette[piece_id] = color
+        window.destroy()
+
+    def preview_back(self):
+        layout = self.back_selected_layout
+        if layout is None:
+            raise FieldError("NoHighlight", "QuiltBackPlan")
+        window = self.dialog("Quilt Back Sketch", "Quilt Backs")
+        window.geometry("1000x700")
+        canvas = tk.Canvas(window, background="white", highlightthickness=0)
+        canvas.pack(fill="both", expand=True, padx=12, pady=12)
+        self.root.update_idletasks()
+        scale = min(780 / layout.target_width, 500 / layout.target_length)
+        offset_x, offset_y = 20, 20
+        for panel in layout.panels:
+            x = offset_x + panel.x * scale
+            y = offset_y + panel.y * scale
+            width = panel.finished_width * scale
+            height = panel.finished_length * scale
+            canvas.create_rectangle(
+                x, y, x + width, y + height,
+                fill=PALETTE.get(panel.palette_color, PALETTE["Gray"]), outline="#222", width=2,
+            )
+            canvas.create_text(x + width / 2, y + height / 2, text=f"Part {panel.number}")
+            if panel.grain_axis == "x":
+                canvas.create_line(x + width * .3, y + height * .7,
+                                   x + width * .7, y + height * .7, arrow=tk.LAST, width=3)
+            elif panel.grain_axis == "y":
+                canvas.create_line(x + width * .7, y + height * .3,
+                                   x + width * .7, y + height * .7, arrow=tk.LAST, width=3)
+            else:
+                canvas.create_text(x + width / 2, y + height * .72, text="Grain unknown")
+        legend = "   ".join(
+            f"Part {panel.number}: {panel.palette_color} = {panel.source_name} "
+            f"({panel.source_color or 'no color recorded'}); grain {panel.grain_axis or 'unknown'}"
+            for panel in layout.panels
+        )
+        ttk.Label(window, text=legend, wraplength=960, padding=8).pack(anchor="w")
+        self.button(window, "Print Plan", self.print_back_plan)
+        self.button(window, "Close", window.destroy)
+
+    def save_back_draft(self):
+        layout = self.back_selected_layout
+        if layout is None:
+            raise FieldError("NoHighlight", "QuiltBackPlan")
+        values = self.back_form.values()
+        back_id = self.db.save_back_draft(
+            values["BackName"],
+            measurement(values["QuiltWidth"], "QuiltWidth"),
+            measurement(values["QuiltLength"], "QuiltLength"),
+            nonnegative_measurement(values["Margin"], "Margin") if values["Margin"] else 0,
+            nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
+            if values["SeamAllowance"] else 0,
+            layout,
+        )
+        self.back_initial = self.back_form.values()
+        self.refresh_backs(back_id)
+        self.back_status.configure(text=f"Draft {back_id} saved. Inventory has not changed.")
+
+    def on_back_select(self):
+        selected = self.back_list.tree.selection()
+        self.back_selected_id = int(selected[0]) if len(selected) == 1 else None
+        if self.back_selected_id is None:
+            self.back_confirm_button.state(["disabled"])
+            self.back_assembled_button.state(["disabled"])
+            return
+        back = self.db.get_quilt_back(self.back_selected_id)
+        self.back_selected_layout = layout_from_record(back)
+        self.back_confirm_button.state(["!disabled"] if back["Status"] == "Draft" else ["disabled"])
+        self.back_assembled_button.state(["!disabled"] if back["Status"] == "Cut" else ["disabled"])
+        self.back_status.configure(
+            text=f"Back {back['ID']}: {back['BackName']} — {back['Status']}; "
+                 f"{display_measurement(back['BackWidth'])} × "
+                 f"{display_measurement(back['BackLength'])} in.",
+        )
+
+    def open_back_cut(self):
+        if self.back_selected_id is None:
+            raise FieldError("OneRecord", "QuiltBack")
+        back = self.db.get_quilt_back(self.back_selected_id)
+        if back["Status"] != "Draft":
+            raise FieldError("Conflict", "QuiltBackID")
+        sources = {}
+        for panel in back["Panels"]:
+            sources.setdefault(panel["FabricPieceID"], []).append(panel)
+        fields = []
+        for source_id in sources:
+            fields.extend((
+                Field(f"RemainingWidth{source_id}", "length", width=8),
+                Field(f"RemainingLength{source_id}", "length", width=8),
+            ))
+        window = self.dialog("Record Actual Cuts and Remainders", "Quilt Backs")
+        window.geometry("760x420")
+        ttk.Label(
+            window, text="Leave both remainder fields blank if the source was consumed. "
+                         "Otherwise enter the measured reusable remainder in the source's recorded orientation.",
+            wraplength=700, padding=8,
+        ).pack(anchor="w")
+        for source_id, panels in sources.items():
+            panel = panels[0]
+            planned = ", ".join(
+                f"Part {item['PanelNumber']}: {display_measurement(item['CutWidth'])} × "
+                f"{display_measurement(item['CutLength'])} in"
+                for item in panels
+            )
+            ttk.Label(
+                window,
+                text=f"Source {source_id}: {panel['FabricName']} "
+                     f"({panel['InventoryColor'] or 'no color recorded'}), "
+                     f"{display_measurement(panel['SourceWidth'])} × "
+                     f"{display_measurement(panel['SourceLength'])} in. Planned cuts: {planned}",
+                padding=(8, 4),
+            ).pack(anchor="w")
+        form = Form(window, tuple(fields), columns=2)
+        form.pack(fill="x")
+        self.watch_dialog(window, form)
+        self.button(window, "Confirm Cuts", lambda: self.commit_back_cut(window, form, sources))
+        self.button(window, "Cancel", window.destroy)
+
+    def commit_back_cut(self, window, form, sources):
+        values = form.values()
+        remnants = {}
+        for source_id in sources:
+            width = values[f"RemainingWidth{source_id}"]
+            length = values[f"RemainingLength{source_id}"]
+            remnants[source_id] = None if not width and not length else (width, length)
+        back = self.db.confirm_back_cut(self.back_selected_id, remnants)
+        window.destroy()
+        self.refresh_backs(back["ID"])
+        self.back_status.configure(
+            text=f"Back {back['ID']} cuts recorded. Sources were retired; entered remnants were added."
+        )
+
+    def mark_back_assembled(self):
+        if self.back_selected_id is None:
+            raise FieldError("OneRecord", "QuiltBack")
+        back = self.db.mark_quilt_back_assembled(self.back_selected_id)
+        self.refresh_backs(back["ID"])
+
+    def print_back_plan(self):
+        if self.back_selected_layout is None and self.back_selected_id is not None:
+            back = self.db.get_quilt_back(self.back_selected_id)
+            layout = layout_from_record(back)
+            title = back["BackName"]
+            quilt_width, quilt_length = back["QuiltWidth"], back["QuiltLength"]
+        else:
+            layout = self.back_selected_layout
+            if layout is None:
+                raise FieldError("NoHighlight", "QuiltBackPlan")
+            if self.back_selected_id is not None:
+                back = self.db.get_quilt_back(self.back_selected_id)
+                title = back["BackName"]
+                quilt_width, quilt_length = back["QuiltWidth"], back["QuiltLength"]
+            else:
+                values = self.back_form.values()
+                title = values["BackName"] or "Quilt Back Draft"
+                quilt_width = measurement(values["QuiltWidth"], "QuiltWidth")
+                quilt_length = measurement(values["QuiltLength"], "QuiltLength")
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Save Quilt Back Plan (new file only)",
+            defaultextension=".html", initialfile="QuiltBackPlan.html",
+            filetypes=(("HTML plan", "*.html"),),
+        )
+        if not destination:
+            return
+        assembly_order = (
+            "single panel; no seams" if layout.direction == "single"
+            else "left to right" if layout.direction == "vertical"
+            else "top to bottom"
+        )
+        report = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>' + escape(title)
+            + "</title><style>body{font-family:sans-serif}table{border-collapse:collapse}"
+            "th,td{border:1px solid #888;padding:6px;text-align:left}"
+            "@media print{button{display:none}}</style></head><body>"
+            f"<h1>{escape(title)}</h1><p>Quilt: {quilt_width / INCH:g} × "
+            f"{quilt_length / INCH:g} in. Back target: {layout.target_width / INCH:g} × "
+            f"{layout.target_length / INCH:g} in. Uniform seam allowance: "
+            f"{layout.seam_allowance / INCH:g} in.</p>"
+            f"<p>Assembly order: {assembly_order}. "
+            "Join adjacent edges using the stated uniform seam allowance.</p>"
+            f"{layout_svg(layout)}{escaped_legend(layout)}"
+            '<button onclick="window.print()">Print</button>'
+            '<script>window.addEventListener("load",()=>window.print());</script></body></html>'
+        )
+        path = Path(destination).resolve()
+        with path.open("x", encoding="utf-8") as output:
+            output.write(report)
+        if not webbrowser.open(path.as_uri()):
+            raise FieldError("Database", "Print", detail=f"No browser opened. Open {path} manually and choose Print.")
 
     def allow_error_discard(self):
         return self.error_form.values() == self.error_initial or messagebox.askyesno(

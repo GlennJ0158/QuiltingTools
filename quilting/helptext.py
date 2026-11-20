@@ -3,7 +3,7 @@
 from .model import FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, SORT_FIELDS, Field
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 
-NAVIGATION = ("Fabric", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
+NAVIGATION = ("Fabric", "Quilt Backs", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
 DROPDOWN_FORM_FIELDS = (
     Field("FieldName", "choice"),
     Field("ListItem"),
@@ -17,6 +17,7 @@ HELP_FIELDS = (
 HELP_COLUMNS = ("ID", "TableName", "FieldName", "HoverText", "FullText")
 DROPDOWN_COLUMNS = ("ID", "FieldName", "ListItem", "Def", "Use")
 HISTORY_COLUMNS = ("ID", "Action", "DateCreated")
+BACK_LAYOUT_COLUMNS = ("ID", "Layout", "Parts", "Seams", "Grain", "Minimum", "FabricArea")
 DROPDOWN_FILTER_FIELDS = (
     Field("ListItem"),
     Field("Default", "choice", choices=("", "Yes", "No")),
@@ -38,9 +39,21 @@ SCREEN_HELP = {
         "to edit it. Add makes a separate rectangle; Update changes the highlighted rectangle. "
         "History shows saved changes. Retire a piece instead of deleting its history. "
         "Select Highlighted, Filter and Set Selection restrict the working list; Reset Selection "
-        "shows all records. Sort saves an ordered list of sort fields. Cutting plans and cutting "
-        "transactions are not implemented. Navigation cancels unfinished work after confirmation; "
+        "shows all records. Sort saves an ordered list of sort fields. Quilt Backs drafts do not "
+        "change fabric; confirmed cuts retire sources and add operator-measured remnants. "
+        "Navigation cancels unfinished work after confirmation; "
         "committed records are never undone.",
+    ),
+    "Quilt Backs": (
+        "Plan, sketch and record rectangular quilt-back panels.",
+        "Enter the quilt size, equal overhang margin and one seam allowance for the entire back. "
+        "Select available physical rectangles and generate one-piece or equal-strip layouts up "
+        "to twenty panels. A source may supply multiple panels when a nonoverlapping shelf cut fits. "
+        "Ranked alternatives favor minimum panel sizes, consistent grain, fewer parts and smaller "
+        "source pieces. Source pieces are not rotated. Set a controlled sketch color per selected fabric; the "
+        "legend also shows its inventory color description. Saving a draft does not change inventory. "
+        "Confirm Cuts asks the operator to report any reusable remainder; source retirement and "
+        "remnant creation are committed together.",
     ),
     "DropDown": (
         "Maintain fabric choices and defaults for new records.",
@@ -244,6 +257,15 @@ FIELD_HELP = {
     "FullText": ("Edit detailed F1 or screen help.", "Required plain text, up to 16,000 characters. "
                  "F1 displays this text for the object. Screen Help uses the ScreenHelp record "
                  "for the current screen. Update saves changes immediately."),
+    "BackName": ("Name the quilt back.", "Required name, up to 120 characters, retained with its plan."),
+    "QuiltWidth": ("Enter the quilt's finished width in inches.", "The planned back adds the same "
+                   "margin on both sides. Use the supported exact inch formats."),
+    "QuiltLength": ("Enter the quilt's finished length in inches.", "The planned back adds the same "
+                    "margin at both ends. Use the supported exact inch formats."),
+    "Margin": ("Set the same overhang on all four sides.", "Backing target width and length each add "
+               "twice this value to the quilt dimensions."),
+    "SeamAllowance": ("Set one allowance for every panel seam.", "Cut widths and lengths include this "
+                      "same allowance on both joined edges."),
     "ListItem": ("Enter a new dropdown choice.", "Required nonblank text, up to 120 characters. "
                  "Choose Add Item to save it. Existing choices differing only in ASCII case or "
                  "surrounding spaces reuse the existing spelling."),
@@ -264,6 +286,7 @@ BUTTON_HELP = {
               "highlights; unsaved form edits are excluded. If the browser does not open, open "
               "the saved report manually. An empty list produces a headings-only report."),
     "Fabric": ("Open Fabric inventory.", "Switch to the Fabric working list and entry form."),
+    "Quilt Backs": ("Plan and track quilt-back construction.", "Open the quilt-back planner."),
     "DropDown": ("Open dropdown maintenance.", "Switch to fabric choice and default maintenance."),
     "HelpText": ("Open help maintenance.", "Switch to editable tooltip and detailed-help records."),
     "Setup": ("Open backup and restore utilities.", "Switch to Setup for verified database copies."),
@@ -300,6 +323,21 @@ BUTTON_HELP = {
                  "reuse the stored spelling. Fixed direction and status choices cannot be extended."),
     "Set Default": ("Use the highlighted item on new fabric forms.", "Select exactly one active "
                     "dropdown record. Save its default immediately without modifying saved fabric."),
+    "Generate Plans": ("Rank feasible rectangular panel layouts.", "Generate one-piece or equal-strip "
+                       "candidates from the highlighted available fabric rectangles."),
+    "Set Sketch Color": ("Choose the controlled sketch color for one fabric.", "This plan-only palette "
+                         "color does not change inventory. The printed legend also retains the recorded color."),
+    "Preview Sketch": ("Preview the selected assembly sketch.", "Panels are shaded by the controlled "
+                       "palette. Arrows show recorded grain direction; unknown grain is labeled."),
+    "Save Draft": ("Save the selected plan without changing inventory.", "The saved draft records "
+                   "source IDs and revisions. Inventory is adjusted only when cuts are confirmed."),
+    "Confirm Cuts": ("Record operator-reported cuts and remnants.", "Sources are rechecked for availability "
+                     "and revision. Retired sources and new reusable remnants are committed atomically."),
+    "Mark Assembled": ("Mark a cut back as assembled.", "This records the operator's completion status; "
+                       "it does not change inventory."),
+    "Print Plan": ("Print the sketch and assembly legend.", "Save an HTML plan to a new filename; "
+                   "the report includes target dimensions, seam allowance, panel cut sizes, colors and grain."),
+    "Refresh Fabric": ("Reload available rectangles.", "Refresh the source list before generating or confirming a plan."),
     "Apply": ("Validate and apply this dialog's settings.", "Apply the current criteria or sort "
               "and close the dialog. Invalid input leaves the dialog open for correction."),
     "Clear Fields": ("Reset this dialog's input fields.", "Clear optional inputs and restore field "
@@ -325,6 +363,13 @@ SCREEN_FIELDS = {
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
     "Error Set": (Field("SavedSet"), Field("SetName")),
     "Fabric": FABRIC_FIELDS,
+    "Quilt Backs": (
+        Field("BackName", required=True),
+        Field("QuiltWidth", "length", required=True),
+        Field("QuiltLength", "length", required=True),
+        Field("Margin", "length", default="4"),
+        Field("SeamAllowance", "length", default="1/2"),
+    ),
     "Filter": FILTER_FIELDS,
     "DropDown": DROPDOWN_FORM_FIELDS,
     "DropDown Filter": DROPDOWN_FILTER_FIELDS,
@@ -353,6 +398,10 @@ SCREEN_COLUMNS = {
     "DropDown": ("ID", "FieldName", "ListItem", "Def", "Use"),
     "HelpText": HELP_COLUMNS,
     "History": ("ID", "Action", "DateCreated"),
+    "Quilt Backs": tuple(dict.fromkeys((
+        *LIST_COLUMNS, *BACK_LAYOUT_COLUMNS, "BackName", "BackWidth", "BackLength",
+        "Status", "DateModified",
+    ))),
 }
 SCREEN_BUTTONS = {
     "ErrorMessage": ("Add", "Update", "Delete", "Clear", "Select Highlighted", "Filter",
@@ -362,6 +411,8 @@ SCREEN_BUTTONS = {
     "Error Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
+    "Quilt Backs": ("Generate Plans", "Set Sketch Color", "Preview Sketch", "Save Draft",
+                    "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric"),
     "DropDown": ("Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
                  "Add Item", "Set Default"),
     "Add Item": ("Add Item", "Cancel"),
@@ -396,6 +447,16 @@ COLUMN_HELP = {
                "changes an existing one. Highlight the row to review Before and After values."),
     "DateCreated": ("When this change was committed.", "Displayed in local time to the minute. "
                     "The database retains the complete timestamp."),
+    "DateModified": ("When this plan was last changed.", "Displayed in local time to the minute."),
+    "BackWidth": ("Finished backing width.", "Quilt width plus twice the uniform side margin."),
+    "BackLength": ("Finished backing length.", "Quilt length plus twice the uniform end margin."),
+    "Layout": ("How the backing panels are joined.", "Vertical panels are joined side by side; "
+               "horizontal panels are joined end to end."),
+    "Parts": ("Number of panels in this candidate.", "Fewer panels generally mean less assembly work."),
+    "Seams": ("Number of seams between panels.", "Each seam uses the uniform seam allowance entered for this back."),
+    "Grain": ("Whether panel grain directions agree.", "Unknown source grain is shown explicitly in the sketch."),
+    "Minimum": ("Smallest-panel target reached.", "20% is preferred, then 10%; every panel must be at least five inches."),
+    "FabricArea": ("Total area of source pieces.", "This favors smaller available source rectangles; actual remainder is measured by the operator."),
 }
 
 
