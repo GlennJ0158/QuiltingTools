@@ -9,6 +9,8 @@ DROPDOWN_FORM_FIELDS = (
     Field("TableName", "choice"),
     Field("FieldName", "choice"),
     Field("ListItem"),
+    Field("Def", "choice"),
+    Field("Use", "choice"),
 )
 HELP_FIELDS = (
     Field("TableName", required=True),
@@ -103,7 +105,9 @@ SCREEN_HELP = {
         "Maintain values keyed by database table or application screen.",
         "Choose a Table Name (a database table or screen) and its Field Name or Button Name. "
         "The list shows values for that key. Select Highlighted, Filter, Set Selection and Sort "
-        "manage the current list. Add Item saves a value. FabricPiece fields continue to provide "
+        "manage the current list. Add, Update and Delete maintain values and their Def and Use flags. "
+        "Set or clear each flag for Add; Update can leave either unchanged. Multiple defaults "
+        "produce a warning; the first active default alphabetically is used. FabricPiece fields continue to provide "
         "the choices used by fabric entry forms; screen and other table values are stored for their "
         "corresponding keys.",
     ),
@@ -522,7 +526,7 @@ SCREEN_BUTTONS = {
     "Quilt Backs Sort": ("Apply", "Clear Fields", "Cancel"),
     "Quilt Backs Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "DropDown": ("Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
-                 "Add Item", "Set Default"),
+                 "Add", "Update", "Delete"),
     "Add Item": ("Add Item", "Cancel"),
     "HelpText": ("Update", "Clear", "Select Highlighted", "Filter", "Set Selection",
                  "Reset Selection", "Sort"),
@@ -546,10 +550,10 @@ COLUMN_HELP = {
     "Revision": ("Saved revision number.", "Changes whenever this block or its parts are saved."),
     "ID": ("Unique saved record number.", "Database-generated identity for this record; not a row "
            "count or list position. The identity remains stable when the list is sorted."),
-    "Def": ("Whether this item is the key's default.", "1 marks the active default; 0 means it "
-            "is not the default. Use Set Default to change the value marked for this key."),
+    "Def": ("Whether this item is the key's default.", "1 marks a default; 0 means it "
+            "is not a default. If multiple active defaults exist, the first alphabetically is used."),
     "Use": ("Whether this dropdown value is active.", "1 means the value is active and appears "
-            "in this maintenance list. FabricPiece fields also offer active values to fabric forms."),
+            "in fabric selection lists. Inactive values remain visible in the maintenance list."),
     "ListItem": ("Saved value for this key.", "The exact stored spelling for the selected "
                  "Table Name and Field Name. FabricPiece field values appear in fabric forms."),
     "Action": ("Type of saved inventory change.", "Added creates a new physical rectangle; Updated "
@@ -583,10 +587,10 @@ def default_help():
                 hover, full = "Save the selected help pair.", (
                     "Save Hover Text and Full Text for the selected generated key. Keys stay "
                     "unchanged. New tooltip and F1 lookups use the saved text immediately.")
-            if screen == "DropDown" and button == "Add Item":
-                hover, full = ("Save a value for the selected table or screen key.",
-                               "Enter a nonblank value for the selected Table Name and Field Name. "
-                               "FabricPiece fields retain their existing validation and canonicalization.")
+            if screen == "DropDown" and button in ("Add", "Update", "Delete"):
+                hover, full = (f"{button} a dropdown value.",
+                               "Add requires an item and explicit Def and Use choices. Highlight one row "
+                               "to update or delete it. Update can ignore either flag.")
             if screen == "HelpText" and button == "Set Selection":
                 hover, full = "Save or recall a HelpText list snapshot.", SCREEN_HELP["HelpText Set"][1]
             if screen == "ErrorMessage" and button in (
@@ -646,6 +650,10 @@ def default_help():
                                   "The available names depend on Table Name. Screen button captions "
                                   "can also identify a value list."),
                     "ListItem": COLUMN_HELP["ListItem"],
+                    "Def": ("Choose how to change the default flag.",
+                            "Choose Set Default or Clear Default for Add; Update may ignore the flag."),
+                    "Use": ("Choose how to change the active flag.",
+                            "Choose Set Use or Clear Use for Add; Update may ignore the flag."),
                 }[field.name]
             elif screen == "QuiltBlock" and field.name == "Description":
                 pair = ("Describe this block.", "Optional block description, up to 4,000 characters.")
