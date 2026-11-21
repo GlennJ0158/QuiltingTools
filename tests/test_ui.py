@@ -6,9 +6,10 @@ from pathlib import Path
 from html.parser import HTMLParser
 from unittest.mock import patch
 from tkinter import ttk
+from tkinter import font as tkfont
 
 from quilting.database import Database
-from quilting.helptext import NAVIGATION
+from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
 )
@@ -779,7 +780,7 @@ class ScreenTests(unittest.TestCase):
         form.variables["SortField1"].set("List Item")
         form.variables["Direction1"].set("desc")
         self.click(self.app.dialogs[-1], "Apply")
-        names = [self.app.dropdown_list.tree.item(item, "values")[2]
+        names = [self.app.dropdown_list.tree.item(item, "values")[3]
                  for item in self.app.dropdown_list.tree.get_children()]
         self.assertEqual(names, sorted(names, reverse=True))
         self.click(self.app.dropdown_page, "Set Selection")
@@ -913,6 +914,48 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.sets("History", piece_id)[0]["SetName"], "Updated only")
         other_piece = self.db.save_piece(fabric(FabricName="Other piece"))
         self.assertEqual(self.db.sets("History", other_piece), [])
+        self.errors.assert_not_called()
+
+    def test_dropdown_screen_edits_table_or_screen_key_and_compacts_columns(self):
+        self.app.show_screen("DropDown")
+        self.assertEqual(tuple(field.name for field in self.app.dropdown_form.fields),
+                         ("TableName", "FieldName", "ListItem"))
+        self.app.dropdown_form.variables["TableName"].set("HelpText")
+        self.app.dropdown_form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.app.dropdown_form.variables["FieldName"].set("Update")
+        self.app.dropdown_form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.app.dropdown_form.variables["ListItem"].set("Apply help changes")
+        self.click(self.app.dropdown_page, "Add Item")
+        row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
+        self.assertEqual((row["TableName"], row["FieldName"], row["ListItem"]),
+                         ("HelpText", "Update", "Apply help changes"))
+        self.assertEqual(self.app.dropdown_list.tree.item(str(row["ID"]), "values")[1:4],
+                         ("HelpText", "Update", "Apply help changes"))
+        expected_width = tkfont.nametofont("TkDefaultFont").measure("0" * 5) + 10
+        for name in ("Def", "Use"):
+            self.assertEqual(self.app.dropdown_list.tree.column(name, "width"), expected_width)
+        for name in DROPDOWN_COLUMNS:
+            self.assertFalse(self.app.dropdown_list.tree.column(name, "stretch"))
+        self.click(self.app.dropdown_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("Help buttons")
+        self.click(self.app.dialogs[-1], "Save Current")
+        selection = self.db.sets("DropDown", ("HelpText", "Update"))
+        self.assertEqual(len(selection), 1)
+        self.assertEqual(self.db.set_members(
+            selection[0]["ID"], "DropDown", ("HelpText", "Update")), [row["ID"]])
+        self.assertEqual(self.db.sets("DropDown", ("FabricPiece", "Color")), [])
+        self.errors.assert_not_called()
+
+    def test_error_message_entry_is_one_row_and_preserves_multiline_text(self):
+        self.app.show_screen("ErrorMessage")
+        self.assertTrue(all(widget.cget("height") == 1
+                            for widget in self.app.error_form.widgets.values()))
+        self.assertEqual({widget.grid_info()["row"] for widget in self.app.error_form.widgets.values()}, {0})
+        self.app.error_form.widgets["Description"].insert("end", "First line\nSecond line")
+        self.assertEqual(self.app.error_form.values()["Description"], "First line\nSecond line")
         self.errors.assert_not_called()
 
 if __name__ == "__main__":

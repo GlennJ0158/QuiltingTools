@@ -16,10 +16,10 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 6 prompt for a backed-up
+automatically. Databases with schema versions 1 through 7 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
-working-list selection snapshots, Quilt Backs planning and saved-plan selections; declining leaves the
-database unchanged. Close all other copies of the application before accepting.
+working-list selections, Quilt Backs planning and generalized dropdown keys; declining
+leaves the database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
@@ -76,11 +76,12 @@ not literal complete error messages. System/SQLite exception details are represe
 by their enclosing template; arbitrary OS-specific strings are not enumerated.
 Startup messages may not have runtime Error IDs.
 
-The toolbar is **Select Highlighted / Filter / Set / Sort**, followed by Reset
-Selection, Refresh and Print. Filter searches Error Text, Likely Cause and
+The entry fields each show one line while retaining multiline text. The toolbar is
+**Select Highlighted / Filter / Set Selection / Reset Selection / Sort**, followed by
+Refresh and Print. Filter searches Error Text, Likely Cause and
 Description using literal text-contains matching, ignoring ASCII case. Multiple
 nonblank criteria are ANDed, including any existing highlighted-row restriction.
-Set saves all listed IDs as a named snapshot, not just highlights. Applying a set
+Set Selection saves all listed IDs as a named snapshot, not just highlights. Applying a set
 clears other restrictions. Message sets and saved multi-column sorts are separate
 from Fabric's. ID sorts numerically and is added to break sort ties. Deleting a
 message also removes its saved-set memberships; deleting a set keeps its messages.
@@ -187,10 +188,14 @@ case or surrounding whitespace reuse the existing spelling rather than creating
 duplicates. Saving fabric also registers/canonicalizes these values at the
 database boundary.
 
-Open **DropDown** from the navigation bar, choose a field, highlight an item, and use
-**Set Default**. The next cleared/new form uses that default; existing records
-are not changed. Navigating away from Fabric discards unsaved form values after
-confirmation. The DropDown screen can also add items.
+Open **DropDown** from the navigation bar and choose a database **Table Name** or
+application screen, then its **Field Name** or button name; **List Item** adds a value
+for that key. Values are listed and saved per key. FabricPiece dropdown fields continue
+to populate fabric forms; other table/screen keys are stored independently. Highlight
+an item and use **Set Default** to mark the default for that key. The next cleared/new
+fabric form uses its existing FabricPiece field default; existing records are not
+changed. Def and Use are five-character columns, and unused list width remains at the
+right edge. Navigating away from Fabric discards unsaved form values after confirmation.
 Grain Direction, Print Direction and Status get their defaults from the same
 `Dropdown` table, but keep their defined choices: arbitrary directions or stock
 statuses cannot be added.
@@ -227,8 +232,8 @@ Press F1 in an editable field for help.
 
 The **DropDown** choices, **HelpText** catalog, **Quilt Backs** saved plans and read-only **History** list use
 the same selection, filtering, named-set and multi-column sort workflow. Dropdown
-sets are scoped to the currently selected fabric field; History sets are scoped
-to the currently selected piece. Dropdown filters search List Item or select
+sets are scoped to the currently selected Table Name and Field Name; History sets
+are scoped to the currently selected piece. Dropdown filters search List Item or select
 default/non-default rows. HelpText filters search each text/key column. History
 filters match action, timestamp or saved Before/After values. Quilt Backs filters
 match back name and status; its controls do not affect source or candidate lists.
