@@ -84,7 +84,7 @@ class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
-                 memo_height=None, memo_width=None):
+                 memo_height=None, memo_width=None, memo_scrollbars=False):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
@@ -99,12 +99,20 @@ class Form(ttk.Frame):
             label.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
             owner.attach_help(label, field.name)
             variable = tk.StringVar(master=self, value=field.default)
+            container = None
             if field.kind == "memo":
+                if memo_scrollbars:
+                    container = ttk.Frame(self, style=style)
                 widget = tk.Text(
-                    self, width=memo_width or field.width,
+                    container or self, width=memo_width or field.width,
                     height=memo_height or (3 if field.name == "HoverText" else 6),
                     wrap="word", undo=True,
                 )
+                if container is not None:
+                    scroll = ttk.Scrollbar(container, orient="vertical", command=widget.yview)
+                    widget.configure(yscrollcommand=scroll.set)
+                    widget.pack(side="left")
+                    scroll.pack(side="left", fill="y")
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
             elif field.kind in ("choice", "dropdown"):
@@ -112,7 +120,7 @@ class Form(ttk.Frame):
                                       state="readonly", width=field.width, justify="left")
             else:
                 widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
-            widget.grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
+            (container or widget).grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
             self.variables[field.name], self.widgets[field.name] = variable, widget
             owner.attach_help(widget, field.name)
             if database is not None and field.name in DROPDOWN_FIELDS:
@@ -1032,27 +1040,40 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.error_selected_ids = None
         self.error_selection_description = ""
         self.error_sort = self.db.load_sort("ErrorMessageSort")
-        ttk.Label(self.error_page, text="ErrorMessage - Troubleshooting Reference",
+        ttk.Label(self.error_page, text="Error Message",
                   font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
         ttk.Label(self.error_page, text="Reference edits do not change runtime error dialogs. "
                   "Numbered fixes correspond to numbered likely causes; braces mark variable details.",
                   wraplength=1100).pack(anchor="w")
+        entry = ttk.Frame(self.error_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        identity = ttk.Frame(entry, padding=(12, 4), style="Entry.TFrame")
+        identity.pack(anchor="w")
+        id_label = ttk.Label(identity, text="ID", style="Entry.TLabel")
+        id_label.pack(side="left", padx=(0, 8))
+        self.error_id_value = tk.StringVar(master=identity)
+        id_field = ttk.Entry(identity, textvariable=self.error_id_value, state="readonly", width=10)
+        id_field.pack(side="left")
+        self.attach_help(id_label, "Column:ID")
+        self.attach_help(id_field, "Column:ID")
         self.error_form = Form(
-            self.error_page, ERROR_FIELDS, columns=3, style="Entry.TFrame", memo_height=1, memo_width=28,
+            entry, ERROR_FIELDS, columns=3, style="Entry.TFrame", memo_height=3, memo_width=28,
+            memo_scrollbars=True,
         )
         self.error_form.pack(fill="x")
-        self.error_details = ttk.Label(self.error_page, padding=4)
+        self.error_details = ttk.Label(entry, padding=4, style="Entry.TLabel")
         self.error_details.pack(anchor="w")
-        actions = ttk.Frame(self.error_page, padding=8)
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
         actions.pack(fill="x")
         self.button(actions, "Add", self.add_error)
         self.error_update = self.button(actions, "Update", self.update_error)
         self.error_delete = self.button(actions, "Delete", self.delete_error)
         self.button(actions, "Clear", self.clear_error_entry)
+        self.button(actions, "Select Highlighted", self.select_errors)
         tools = ttk.Frame(self.error_page, padding=(8, 0))
         tools.pack(fill="x")
         for label, action in (
-            ("Select Highlighted", self.select_errors), ("Filter", self.open_filter),
+            ("Filter", self.open_filter),
             ("Set Selection", self.open_sets), ("Reset Selection", self.reset_errors),
             ("Sort", self.open_sort), ("Refresh", self.refresh_error_view),
             ("Print", self.print_errors),
@@ -1419,6 +1440,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def clear_error(self):
         self.error_id = None
+        self.error_id_value.set("")
         self.error_selection = ()
         self.error_list.tree.selection_remove(self.error_list.tree.selection())
         self.error_form.defaults()
@@ -1445,10 +1467,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             return
         row = self.db.get_error(int(selected[0]))
         self.error_id = row["ID"]
+        self.error_id_value.set(str(self.error_id))
         self.error_selection = selected
         self.error_form.assign({field.name: row[field.name] for field in ERROR_FIELDS})
         self.error_initial = self.error_form.values()
-        self.error_details.configure(text=f"ID: {self.error_id}")
+        self.error_details.configure(text="")
         self.error_update.state(["!disabled"])
         self.error_delete.state(["!disabled"])
 

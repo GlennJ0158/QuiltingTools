@@ -80,7 +80,8 @@ not literal complete error messages. System/SQLite exception details are represe
 by their enclosing template; arbitrary OS-specific strings are not enumerated.
 Startup messages may not have runtime Error IDs.
 
-The entry fields each show one line while retaining multiline text. The toolbar is
+The entry fields each show three lines and have vertical scrollbars. The read-only
+ID appears above Error Text; it is blank when no record is selected. The toolbar is
 **Select Highlighted / Filter / Set Selection / Reset Selection / Sort**, followed by
 Refresh and Print. Filter searches Error Text, Likely Cause and
 Description using literal text-contains matching, ignoring ASCII case. Multiple

@@ -241,6 +241,7 @@ class ScreenTests(unittest.TestCase):
         for screen, page, form_name, action_name in (
             ("DropDown", self.app.dropdown_page, "dropdown_form", "Add"),
             ("HelpText", self.app.help_page, "help_form", "Update"),
+            ("ErrorMessage", self.app.error_page, "error_form", "Select Highlighted"),
             ("Quilt Backs", self.app.backs_page, "back_form", "Set Sketch Color"),
         ):
             self.app.show_screen(screen)
@@ -1026,13 +1027,41 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.sets("DropDown", ("FabricPiece", "Color")), [])
         self.errors.assert_not_called()
 
-    def test_error_message_entry_is_one_row_and_preserves_multiline_text(self):
+    def test_error_message_entry_has_scrollable_fields_and_readonly_id(self):
         self.app.show_screen("ErrorMessage")
-        self.assertTrue(all(widget.cget("height") == 1
-                            for widget in self.app.error_form.widgets.values()))
-        self.assertEqual({widget.grid_info()["row"] for widget in self.app.error_form.widgets.values()}, {0})
-        self.app.error_form.widgets["Description"].insert("end", "First line\nSecond line")
-        self.assertEqual(self.app.error_form.values()["Description"], "First line\nSecond line")
+        page = self.app.error_page
+        self.assertTrue(any(isinstance(w, ttk.Label) and w.cget("text") == "Error Message"
+                            for w in page.winfo_children()))
+        form = self.app.error_form
+        id_field = next(w for w in descendants(page)
+                        if isinstance(w, ttk.Entry) and str(w.cget("textvariable")) == str(self.app.error_id_value))
+        self.assertEqual(str(id_field.cget("state")), "readonly")
+        self.assertEqual(id_field.master.master, form.master)
+        self.assertLess(list(form.master.pack_slaves()).index(id_field.master),
+                        list(form.master.pack_slaves()).index(form))
+        self.assertEqual(self.app.error_id_value.get(), "")
+        self.root.deiconify()
+        self.root.update()
+        for name, widget in form.widgets.items():
+            self.assertEqual(widget.cget("height"), 3)
+            scroll = next(w for w in widget.master.winfo_children() if isinstance(w, ttk.Scrollbar))
+            value = "\n".join(f"{name} line {i}" for i in range(12))
+            form.variables[name].set(value)
+            self.root.update()
+            scroll.tk.call(scroll.cget("command"), "moveto", 1.0)
+            self.root.update()
+            self.assertGreater(widget.yview()[0], 0)
+            self.assertEqual(scroll.get(), widget.yview())
+            self.assertEqual(form.values()[name], value)
+        form.widgets["Description"].insert("end", "\nEdited")
+        self.assertTrue(form.values()["Description"].endswith("\nEdited"))
+        self.click(page, "Clear")
+        message_id = self.app.error_list.tree.get_children()[0]
+        self.app.error_list.tree.selection_set(message_id)
+        self.root.update()
+        self.assertEqual(self.app.error_id_value.get(), message_id)
+        self.click(page, "Clear")
+        self.assertEqual(self.app.error_id_value.get(), "")
         self.errors.assert_not_called()
 
 if __name__ == "__main__":
