@@ -44,7 +44,8 @@ SCREEN_HELP = {
               "versions and their quantities. Map each part color to one or more inventory color "
               "values, then choose Plan Quilt. Plans pack conservative cut bounding rectangles, "
               "can report shortages and do not reserve or change inventory. Existing plans are "
-              "snapshots; regenerate after changes. Choose Entire Quilt or By Block, then "
+              "snapshots; regenerate after changes. Available sources follow the Fabric working list. "
+              "Choose Entire Quilt or By Block, then "
               "Print Quilt Plan to print the saved plan."),
     "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
                    "instance's position and orientation in Sketch, then approve a fully covered, "
@@ -66,7 +67,8 @@ SCREEN_HELP = {
         "to edit it. Add makes a separate rectangle; Update changes the highlighted rectangle. "
         "History shows saved changes. Retire a piece instead of deleting its history. "
         "Select Highlighted, Filter and Set Selection restrict the working list; Reset Selection "
-        "shows all records. Sort saves an ordered list of sort fields. Quilt Backs drafts do not "
+        "shows all records. Sort saves an ordered list of sort fields. Quilt Backs and Quilt planning "
+        "use only available fabric in this working list. Quilt Backs drafts do not "
         "change fabric; confirmed cuts retire sources and add operator-measured remnants. "
         "Navigation cancels unfinished work after confirmation; "
         "committed records are never undone.",
@@ -74,7 +76,8 @@ SCREEN_HELP = {
     "Quilt Backs": (
         "Plan, sketch and record rectangular quilt-back panels.",
         "Enter the quilt size, equal overhang margin and one seam allowance for the entire back. "
-        "Select available physical rectangles and generate one-piece or equal-strip layouts up "
+        "Available rectangles follow the Fabric working list. Highlight specific rectangles, or leave "
+        "none highlighted to use all listed available rectangles, and generate layouts up "
         "to twenty panels. A source may supply multiple panels when a nonoverlapping shelf cut fits. "
         "Ranked alternatives favor minimum panel sizes, consistent grain, fewer parts and smaller "
         "source pieces. Source pieces are not rotated. Set a controlled sketch color per selected fabric; the "
@@ -398,8 +401,8 @@ BUTTON_HELP = {
     "Set Default": ("Mark the highlighted item as this key's default.", "Select exactly one active "
                     "dropdown record. Save its default immediately; FabricPiece form defaults "
                     "change for new or cleared forms, but saved fabric is not modified."),
-    "Generate Plans": ("Rank feasible rectangular panel layouts.", "Generate one-piece or equal-strip "
-                       "candidates from the highlighted available fabric rectangles."),
+    "Generate Plans": ("Rank feasible rectangular panel layouts.", "Generate candidates from highlighted "
+                       "rectangles, or all listed available rectangles if none are highlighted."),
     "Set Sketch Color": ("Choose the controlled sketch color for one fabric.", "This plan-only palette "
                          "color does not change inventory. The printed legend also retains the recorded color."),
     "Preview Sketch": ("Preview the selected assembly sketch.", "Panels are shaded by the controlled "

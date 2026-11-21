@@ -257,6 +257,24 @@ class ScreenTests(unittest.TestCase):
             self.assertEqual(action.master.cget("style"), "Entry.TFrame", screen)
             self.assertNotEqual(form.master, page, screen)
 
+    def test_back_sources_follow_inventory_working_selection_and_default_to_visible_sources(self):
+        first = self.add_piece(FabricName="First", UsableWidth="100", UsableLength="100")
+        second = self.add_piece(FabricName="Second", UsableWidth="100", UsableLength="100")
+        self.app.selected_ids = [first]
+        self.app.show_screen("Quilt Backs")
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(first),))
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.generate_back_plans()
+        self.assertTrue(self.app.back_layouts)
+        self.assertTrue(all(panel.source_id == first for layout in self.app.back_layouts
+                            for panel in layout.panels))
+        self.app.selected_ids = None
+        self.app.refresh_back_stock()
+        self.assertEqual(set(self.app.back_stock.tree.get_children()), {str(first), str(second)})
+
     def test_quilt_back_saved_plans_have_isolated_ordered_working_list_tools(self):
         source_id = self.add_piece(
             FabricName="Backing", UsableWidth="100", UsableLength="100",

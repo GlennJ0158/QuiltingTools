@@ -6,6 +6,7 @@ from decimal import Decimal
 from html import escape
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 from .blocks import (
     BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, PART_FIELDS, cutting_shape, placed_shape, validate_layout,
@@ -21,22 +22,28 @@ class BlockScreenMixin:
         self.block_id = self.block_revision = None
         self.block_selection = ()
         ttk.Label(self.block_page, text="Quilt Blocks", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.block_form = Form(self.block_page, BLOCK_FIELDS, columns=3, style="Entry.TFrame")
+        entry = ttk.Frame(self.block_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.block_form = Form(entry, BLOCK_FIELDS, columns=3, style="Entry.TFrame")
         self.block_form.pack(fill="x")
-        actions = ttk.Frame(self.block_page, padding=4)
+        actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
         for label, action in (("Add", self.add_block), ("Update", self.update_block),
                               ("Delete", self.delete_block), ("Clear", self.clear_block_entry),
                               ("New Version", self.copy_block), ("Parts", self.open_parts),
                               ("Sketch", self.open_block_sketch), ("Approve", self.approve_block)):
             self.button(actions, label, action)
-        tools = ttk.Frame(self.block_page, padding=4)
+        tools = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         tools.pack(fill="x")
         for label, action in (("Select Highlighted", self.block_highlight), ("Filter", self.block_filter),
                               ("Set Selection", self.block_sets), ("Sort", self.block_sort),
                               ("Reset Selection", self.block_reset), ("Refresh", self.refresh_blocks_safe)):
             self.button(tools, label, action)
         self.block_list = RecordList(self.block_page, BLOCK_COLUMNS)
+        font = tkfont.nametofont("TkHeadingFont")
+        for name in ("FinishedWidth", "FinishedLength", "Scale", "Status", "Revision"):
+            width = font.measure(caption(name) + "00") + 12
+            self.block_list.tree.column(name, width=width, minwidth=width, stretch=False)
         self.block_list.pack(fill="both", expand=True)
         self.block_list.tree.bind("<<TreeviewSelect>>", self.command(self.select_block))
         self.block_initial = self.block_form.values()

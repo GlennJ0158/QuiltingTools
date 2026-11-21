@@ -994,7 +994,7 @@ class Database:
             raise FieldError("DatabaseFormat", "QuiltPlan", detail=str(error)) from error
         return result
 
-    def create_quilt_plan(self, quilt_id, revision):
+    def create_quilt_plan(self, quilt_id, revision, selected_ids=None):
         with self._block_transaction():
             self._quilt_revision(quilt_id, revision)
             records = self.quilt_uses(quilt_id)
@@ -1011,7 +1011,7 @@ class Database:
             mappings = {}
             for row in self.quilt_mappings(quilt_id):
                 mappings.setdefault(row["PartColor"], []).append(row["InventoryColor"])
-            draft = plan_quilt(uses, mappings, self.pieces())
+            draft = plan_quilt(uses, mappings, self.pieces(selected_ids=selected_ids))
             draft.update(quilt=self.get_quilt(quilt_id), uses=uses, mappings=mappings)
             return self.connection.execute(
                 "INSERT INTO QuiltPlan (QuiltID, QuiltRevision, PlanData, DateCreated) VALUES (?, ?, ?, ?)",

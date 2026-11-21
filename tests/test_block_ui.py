@@ -139,3 +139,27 @@ class BlockUITests(unittest.TestCase):
         self.click(self.app.quilt_page, "Plan Quilt")
         self.errors.assert_called_once()
         self.assertIn("Save block quantities", self.errors.call_args.args[1])
+
+    def test_quilt_planning_respects_fabric_working_selection(self):
+        block_id = self.db.add_block(block())
+        self.db.save_block_part(block_id, 1, part())
+        placements = self.db.block_placements(block_id)
+        self.db.save_block_placement(block_id, 2, placements[1]["ID"], 5_000_000, 0, 0, False)
+        self.db.approve_block(block_id, 3)
+        first = self.db.save_piece(fabric(FabricName="First", Color="Red", UsableWidth="12", UsableLength="22"))
+        self.db.save_piece(fabric(FabricName="Second", Color="Red", UsableWidth="12", UsableLength="22"))
+        quilt = self.db.add_quilt("Test")
+        self.db.set_quilt_use(quilt, 1, block_id, 2)
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        self.app.selected_ids = [first]
+        self.app.show_screen("Quilt")
+        self.app.load_quilt(quilt)
+        self.app.generate_quilt_plan()
+        data = self.db.get_quilt_plan(self.app.quilt_plan_id)["PlanData"]
+        self.assertEqual([entry["source"]["ID"] for entry in data["sources"]], [first])
+        self.assertEqual(data["missing"], [])
+        self.app.selected_ids = []
+        self.app.generate_quilt_plan()
+        data = self.db.get_quilt_plan(self.app.quilt_plan_id)["PlanData"]
+        self.assertEqual(data["sources"], [])
+        self.assertEqual(data["missing"][0]["count"], 4)
