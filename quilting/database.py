@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .backs import MAX_PANELS, MINIMUM_PART, PALETTE
 from .helptext import (
-    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
+    BACK_COLUMNS, BACK_FILTER_FIELDS, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
     HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, default_help,
 )
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
@@ -19,7 +19,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ERROR_SCHEMA = """
 CREATE TABLE ErrorMessage (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +41,7 @@ CREATE TABLE ErrorMessageMember (
 WORKING_LIST_SCHEMA = """
 CREATE TABLE WorkingListSet (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
-    ScreenName TEXT NOT NULL CHECK(ScreenName IN ('DropDown', 'HelpText', 'History')),
+    ScreenName TEXT NOT NULL CHECK(ScreenName IN ('DropDown', 'HelpText', 'History', 'Quilt Backs')),
     ScopeName TEXT NOT NULL DEFAULT '',
     SetName TEXT NOT NULL CHECK(length(trim(SetName)) BETWEEN 1 AND 120),
     DateCreated TEXT NOT NULL,
@@ -216,12 +216,13 @@ SAVED_SORTS = {
     "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
     "HistorySort": (("ID", "Action", "DateCreated"),
                     (("ID", "desc"),)),
+    "QuiltBackSort": (BACK_COLUMNS, (("DateModified", "desc"), ("ID", "desc"))),
 }
 SELECTION_TABLES = {
     "Fabric": ("SelectionSet", "SelectionMember", "FabricPieceID"),
     "ErrorMessage": ("ErrorMessageSet", "ErrorMessageMember", "ErrorMessageID"),
 }
-WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History"))
+WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History", "Quilt Backs"))
 
 
 def now():
@@ -256,7 +257,7 @@ class Database:
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
                   and self.connection.execute("PRAGMA user_version").fetchone()[0] in
-                  (1, 2, 3, 4, 5)):
+                  (1, 2, 3, 4, 5, 6)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -275,7 +276,7 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, 4, 5, SCHEMA_VERSION)
+                or version not in ((1, 2, 3, 4, 5, 6, SCHEMA_VERSION)
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
@@ -311,16 +312,25 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5):
+            if version not in (1, 2, 3, 4, 5, 6):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
                       + (HELP_SCHEMA if version < 3 else "")
                       + (ERROR_SCHEMA if version < 4 else "")
                       + (WORKING_LIST_SCHEMA if version < 5 else "")
-                      + BACK_SCHEMA)
+                      + (BACK_SCHEMA if version < 6 else ""))
+            if version >= 5:
+                self.connection.execute("ALTER TABLE WorkingListMember RENAME TO OldWorkingListMember")
+                self.connection.execute("ALTER TABLE WorkingListSet RENAME TO OldWorkingListSet")
+                schema += WORKING_LIST_SCHEMA
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
+            if version >= 5:
+                self.connection.execute("INSERT INTO WorkingListSet SELECT * FROM OldWorkingListSet")
+                self.connection.execute("INSERT INTO WorkingListMember SELECT * FROM OldWorkingListMember")
+                self.connection.execute("DROP TABLE OldWorkingListMember")
+                self.connection.execute("DROP TABLE OldWorkingListSet")
             if version == 1:
                 self._seed_dropdowns()
                 message = next(message for message in MESSAGES if message[0] == "Measurement")
@@ -713,11 +723,27 @@ class Database:
             )
         return back_id
 
-    def quilt_backs(self):
-        return [dict(row) for row in self.connection.execute(
+    def quilt_backs(self, filters=None, selected_ids=None, sort=None):
+        values = {field.name: "" for field in BACK_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(BACK_FILTER_FIELDS, values)
+        order = self.load_sort("QuiltBackSort") if sort is None else normalize_sort(sort, BACK_COLUMNS)
+        clauses, args = [], []
+        if clean["BackName"]:
+            clauses.append("instr(lower(BackName), lower(?)) > 0")
+            args.append(clean["BackName"])
+        if clean["Status"]:
+            clauses.append("Status = ?")
+            args.append(clean["Status"])
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
+        rows = [dict(row) for row in self.connection.execute(
             "SELECT ID, BackName, BackWidth, BackLength, Status, DateModified "
-            "FROM QuiltBack ORDER BY DateModified DESC, ID DESC",
+            f"FROM QuiltBack{where} ORDER BY {sql_order}", args,
         )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
 
     def get_quilt_back(self, back_id):
         row = self.connection.execute("SELECT * FROM QuiltBack WHERE ID = ?", (back_id,)).fetchone()
@@ -909,6 +935,8 @@ class Database:
             return self.dropdown_rows(scope)
         if screen == "History":
             return self.history(int(scope))
+        if screen == "Quilt Backs":
+            return self.quilt_backs()
         return self.help_rows()
 
     def save_set(self, name, ids, screen="Fabric", scope=None):

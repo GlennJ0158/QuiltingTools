@@ -22,7 +22,7 @@ from .database import (
 )
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import (
-    BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
+    BACK_COLUMNS, BACK_FILTER_FIELDS, BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
 )
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
@@ -304,8 +304,8 @@ class Application:
             ("Select Highlighted", self.select_highlighted),
             ("Filter", self.open_filter),
             ("Set Selection", self.open_sets),
-            ("Sort", self.open_sort),
             ("Reset Selection", self.reset_selection),
+            ("Sort", self.open_sort),
             ("Refresh", self.refresh_view),
         ):
             self.list_buttons.append(self.button(tools, label, action))
@@ -394,6 +394,7 @@ class Application:
         elif name == "DropDown":
             self.refresh_dropdowns()
         elif name == "Quilt Backs":
+            self.refresh_back_stock()
             self.refresh_backs()
         elif name == "HelpText":
             self.refresh_help()
@@ -573,7 +574,7 @@ class Application:
 
     def open_filter(self, screen=None, state=None, scope=None, refresh=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             fields = self.working_list_fields(screen)
             title = f"Filter {screen}"
@@ -667,9 +668,9 @@ class Application:
         self.button(parent, "Filter", lambda: self.open_filter(screen, state, scope, refresh))
         self.button(parent, "Set Selection", lambda: self.open_sets(
             screen, state, scope, refresh, rows))
-        self.button(parent, "Sort", lambda: self.open_sort(screen, state, refresh))
         self.button(parent, "Reset Selection", lambda: self.reset_working_list(
             screen, state, refresh))
+        self.button(parent, "Sort", lambda: self.open_sort(screen, state, refresh))
 
     def working_list_state(self, screen, state=None):
         if state is not None:
@@ -678,6 +679,8 @@ class Application:
             return self.dropdown_states[self.dropdown_field()]
         if screen == "HelpText":
             return self.help_state
+        if screen == "Quilt Backs":
+            return self.back_state
         raise FieldError("Choice", "Screen")
 
     def working_list_fields(self, screen):
@@ -685,6 +688,7 @@ class Application:
             "DropDown": DROPDOWN_FILTER_FIELDS,
             "HelpText": HELP_FILTER_FIELDS,
             "History": HISTORY_FILTER_FIELDS,
+            "Quilt Backs": BACK_FILTER_FIELDS,
         }[screen]
 
     def working_list_sort(self, screen, state):
@@ -693,6 +697,7 @@ class Application:
                 "DropDown": self.db.load_sort("DropDownSort"),
                 "HelpText": self.db.load_sort("HelpTextSort"),
                 "History": self.db.load_sort("HistorySort"),
+                "Quilt Backs": self.db.load_sort("QuiltBackSort"),
             }[screen]
         return state["sort"]
 
@@ -705,7 +710,8 @@ class Application:
 
     def select_working_list(self, screen, state=None, scope=None, refresh=None):
         state = self.working_list_state(screen, state)
-        listing = {"DropDown": self.dropdown_list, "HelpText": self.help_list}.get(screen)
+        listing = {"DropDown": self.dropdown_list, "HelpText": self.help_list,
+                   "Quilt Backs": self.back_list}.get(screen)
         if screen == "History" and refresh is None:
             raise FieldError("Choice", "Screen")
         selected = listing.tree.selection() if listing is not None else state["tree"].selection()
@@ -734,20 +740,22 @@ class Application:
                   default=next(iter(self.dropdown_names))),
             Field("ListItem"),
         )
-        self.dropdown_form = Form(window, fields)
-        self.dropdown_form.pack(fill="x")
         ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
                   "add form. Defined grain, print and status choices cannot be extended.",
                   wraplength=720, padding=8).pack(anchor="w")
+        entry = ttk.Frame(window, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.dropdown_form = Form(entry, fields, style="Entry.TFrame")
+        self.dropdown_form.pack(fill="x")
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
+        actions.pack(fill="x")
+        self.button(actions, "Add Item", self.add_dropdown)
+        self.button(actions, "Set Default", self.set_dropdown_default)
         tools = ttk.Frame(window, padding=(8, 0))
         tools.pack(fill="x")
         self.add_working_list_tools(tools, "DropDown")
-        actions = ttk.Frame(window, padding=8)
-        actions.pack(fill="x")
         self.dropdown_list = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
         self.dropdown_list.pack(fill="both", expand=True)
-        self.button(actions, "Add Item", self.add_dropdown)
-        self.button(actions, "Set Default", self.set_dropdown_default)
         self.dropdown_states = {
             name: self.new_list_state(self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS)
             for name in self.dropdown_names.values()
@@ -789,20 +797,22 @@ class Application:
 
     def build_helptext(self):
         ttk.Label(self.help_page, text="HelpText", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.help_form = Form(self.help_page, HELP_FIELDS, columns=1)
+        entry = ttk.Frame(self.help_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.help_form = Form(entry, HELP_FIELDS, columns=1, style="Entry.TFrame")
         self.help_form.pack(fill="x")
         for name in ("TableName", "FieldName"):
             self.help_form.widgets[name].configure(state="readonly")
         self.help_state = self.new_list_state(
             self.db.load_sort("HelpTextSort"), HELP_FILTER_FIELDS,
         )
-        tools = ttk.Frame(self.help_page, padding=(8, 0))
-        tools.pack(fill="x")
-        self.add_working_list_tools(tools, "HelpText")
-        actions = ttk.Frame(self.help_page, padding=8)
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
         actions.pack(fill="x")
         self.help_update = self.button(actions, "Update", self.update_help)
         self.button(actions, "Clear", lambda: self.clear_help() if self.allow_navigation() else None)
+        tools = ttk.Frame(self.help_page, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(tools, "HelpText")
         self.help_list = RecordList(self.help_page, HELP_COLUMNS)
         self.help_list.pack(fill="both", expand=True)
         self.help_list.tree.configure(selectmode="browse")
@@ -893,8 +903,8 @@ class Application:
         tools.pack(fill="x")
         for label, action in (
             ("Select Highlighted", self.select_errors), ("Filter", self.open_filter),
-            ("Set", self.open_sets), ("Sort", self.open_sort),
-            ("Reset Selection", self.reset_errors), ("Refresh", self.refresh_error_view),
+            ("Set Selection", self.open_sets), ("Reset Selection", self.reset_errors),
+            ("Sort", self.open_sort), ("Refresh", self.refresh_error_view),
             ("Print", self.print_errors),
         ):
             self.button(tools, label, action)
@@ -913,14 +923,14 @@ class Application:
                  "one seam allowance applies to every join. Drafts do not change inventory.",
             wraplength=1100,
         ).pack(anchor="w")
-        self.back_form = Form(
-            self.backs_page, SCREEN_FIELDS["Quilt Backs"], columns=5,
-        )
+        entry = ttk.Frame(self.backs_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
         self.back_form.pack(fill="x")
         self.back_initial = self.back_form.values()
-        stock_actions = ttk.Frame(self.backs_page, padding=(8, 0))
+        stock_actions = ttk.Frame(entry, padding=(8, 0), style="Entry.TFrame")
         stock_actions.pack(fill="x")
-        ttk.Label(stock_actions, text="Available source rectangles").pack(side="left", padx=(0, 10))
+        ttk.Label(stock_actions, text="Available source rectangles", style="Entry.TLabel").pack(side="left", padx=(0, 10))
         self.button(stock_actions, "Set Sketch Color", self.set_back_palette)
         self.button(stock_actions, "Refresh Fabric", self.refresh_back_stock)
         self.back_stock = RecordList(self.backs_page, LIST_COLUMNS)
@@ -941,9 +951,15 @@ class Application:
             "<<TreeviewSelect>>", self.command(self.on_back_candidate_select),
         )
         ttk.Label(self.backs_page, text="Saved plans").pack(anchor="w", padx=8)
-        self.back_list = RecordList(
-            self.backs_page, ("ID", "BackName", "BackWidth", "BackLength", "Status", "DateModified"),
+        self.back_state = self.new_list_state(self.db.load_sort("QuiltBackSort"), BACK_FILTER_FIELDS)
+        tools = ttk.Frame(self.backs_page, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(
+            tools, "Quilt Backs", refresh=self.refresh_backs,
+            rows=lambda: self.db.quilt_backs(
+                self.back_state["filters"], self.back_state["selected_ids"], self.back_state["sort"]),
         )
+        self.back_list = RecordList(self.backs_page, BACK_COLUMNS)
         self.back_list.tree.configure(height=3)
         self.back_list.pack(fill="both", expand=True)
         self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
@@ -958,6 +974,7 @@ class Application:
         self.back_selected_id = None
         self.back_palette = {}
         self.back_initial = self.back_form.values()
+        self.refresh_back_stock()
         self.refresh_backs()
         self.back_confirm_button.state(["disabled"])
         self.back_assembled_button.state(["disabled"])
@@ -969,13 +986,16 @@ class Application:
         self.back_stock.fill(rows, "available fabric rectangles", self.sort)
 
     def refresh_backs(self, prefer_id=None):
-        self.refresh_back_stock()
-        rows = self.db.quilt_backs()
-        self.back_list.fill(rows, "saved quilt backs", (("DateModified", "desc"), ("ID", "desc")))
-        if prefer_id is not None and self.back_list.tree.exists(str(prefer_id)):
-            self.back_list.tree.selection_set(str(prefer_id))
-            self.back_list.tree.see(str(prefer_id))
-            self.on_back_select()
+        selected = self.back_list.tree.selection()
+        keep = (str(prefer_id),) if prefer_id is not None else selected
+        state = self.back_state
+        rows = self.db.quilt_backs(state["filters"], state["selected_ids"], state["sort"])
+        self.back_list.fill(rows, "saved quilt backs", state["sort"], self.list_context(state))
+        kept = tuple(item for item in keep if self.back_list.tree.exists(item))
+        if kept:
+            self.back_list.tree.selection_set(kept)
+            self.back_list.tree.see(kept[0])
+        self.on_back_select()
 
     def generate_back_plans(self):
         selected = self.back_stock.tree.selection()
@@ -1115,8 +1135,11 @@ class Application:
 
     def on_back_select(self):
         selected = self.back_list.tree.selection()
+        was_saved = self.back_selected_id is not None
         self.back_selected_id = int(selected[0]) if len(selected) == 1 else None
         if self.back_selected_id is None:
+            if was_saved:
+                self.back_selected_layout = None
             self.back_confirm_button.state(["disabled"])
             self.back_assembled_button.state(["disabled"])
             return
@@ -1182,6 +1205,7 @@ class Application:
             remnants[source_id] = None if not width and not length else (width, length)
         back = self.db.confirm_back_cut(self.back_selected_id, remnants)
         window.destroy()
+        self.refresh_back_stock()
         self.refresh_backs(back["ID"])
         self.back_status.configure(
             text=f"Back {back['ID']} cuts recorded. Sources were retired; entered remnants were added."
@@ -1380,15 +1404,16 @@ class Application:
 
     def open_sort(self, screen=None, state=None, refresh=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             columns = {
                 "DropDown": DROPDOWN_COLUMNS,
                 "HelpText": HELP_COLUMNS,
                 "History": HISTORY_COLUMNS,
+                "Quilt Backs": BACK_COLUMNS,
             }[screen]
             sort_key = {"DropDown": "DropDownSort", "HelpText": "HelpTextSort",
-                        "History": "HistorySort"}[screen]
+                        "History": "HistorySort", "Quilt Backs": "QuiltBackSort"}[screen]
             order = self.working_list_sort(screen, state)
             title = f"Sort {screen}"
             window = self.dialog(title, f"{screen} Sort")
@@ -1468,7 +1493,7 @@ class Application:
 
     def open_sets(self, screen=None, state=None, scope=None, refresh=None, rows=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             refresh = refresh or {"DropDown": self.refresh_dropdowns,
                                   "HelpText": self.refresh_help}.get(screen)
@@ -1480,6 +1505,11 @@ class Application:
             elif screen == "HelpText":
                 scope = None
                 list_rows = rows or (lambda: self.db.help_rows(
+                    state["filters"], state["selected_ids"], state["sort"],
+                ))
+            elif screen == "Quilt Backs":
+                scope = None
+                list_rows = rows or (lambda: self.db.quilt_backs(
                     state["filters"], state["selected_ids"], state["sort"],
                 ))
             else:

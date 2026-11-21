@@ -16,9 +16,9 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 5 prompt for a backed-up
+automatically. Databases with schema versions 1 through 6 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
-working-list selection snapshots and Quilt Backs planning; declining leaves the
+working-list selection snapshots, Quilt Backs planning and saved-plan selections; declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
@@ -197,8 +197,8 @@ statuses cannot be added.
 
 ### Working lists
 
-The shared toolbar order is **Select Highlighted, Filter, Set Selection, Sort**,
-followed by Reset Selection and Refresh.
+The shared toolbar order is **Select Highlighted, Filter, Set Selection,
+Reset Selection, Sort**, followed by screen-specific actions such as Refresh.
 
 **Select Highlighted** restricts the current working list to its highlighted
 rows. It requires at least one highlight and does not change inventory.
@@ -225,12 +225,14 @@ are right-aligned; all other values and headings are left-aligned. Internal
 descriptive names such as `UsableWidth` appear as `Usable Width` in labels.
 Press F1 in an editable field for help.
 
-The **DropDown** choices, **HelpText** catalog and read-only **History** list use
+The **DropDown** choices, **HelpText** catalog, **Quilt Backs** saved plans and read-only **History** list use
 the same selection, filtering, named-set and multi-column sort workflow. Dropdown
 sets are scoped to the currently selected fabric field; History sets are scoped
 to the currently selected piece. Dropdown filters search List Item or select
 default/non-default rows. HelpText filters search each text/key column. History
-filters match action, timestamp or saved Before/After values. Each list's sort is
+filters match action, timestamp or saved Before/After values. Quilt Backs filters
+match back name and status; its controls do not affect source or candidate lists.
+Each list's sort is
 saved independently; HelpText no longer relies on heading-click sorting. Applying
 a saved set clears that list's other restrictions, and Reset Selection restores
 all rows in the current scope.
