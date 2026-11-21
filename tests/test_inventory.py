@@ -246,6 +246,66 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.add_dropdown_item("Notes", "Not a dropdown")
 
+    def test_dropdown_flags_defaults_and_selection_cleanup(self):
+        self.assertEqual(self.db.add_dropdown_choice("FabricPiece", "Color", "Sage"), "Sage")
+        seed = next(row for row in self.db.dropdown_rows("FabricName") if row["ListItem"] == "")
+        self.db.save_dropdown("FabricPiece", "FabricName", "", 0, None, seed["ID"], seed)
+        sage = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Sage")
+        self.db.delete_dropdown(sage["ID"], sage)
+        blank = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
+        self.db.save_dropdown("FabricPiece", "Color", "", 0, None, blank["ID"], blank)
+        amber, warning = self.db.save_dropdown("FabricPiece", "Color", "Amber", 0, 1)
+        self.assertFalse(warning)
+        blue, warning = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, 1)
+        self.assertFalse(warning)
+        amber_row = self.db.get_dropdown(amber)
+        _, warning = self.db.save_dropdown("FabricPiece", "Color", "Amber", 1, None, amber, amber_row)
+        self.assertTrue(warning)
+        self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
+        self.assertEqual(self.db.dropdown_default("Color"), "Amber")
+        self.assertEqual(self.db.dropdown_choices("Color"), ("Amber", ADD_ITEM, "", "Blue"))
+        row = self.db.get_dropdown(amber)
+        self.db.save_dropdown("FabricPiece", "Color", "", None, 0, amber, row)
+        self.assertEqual(self.db.dropdown_default("Color"), "Blue")
+        self.assertNotIn("Amber", self.db.dropdown_choices("Color"))
+        self.assertIn(amber, [r["ID"] for r in self.db.dropdown_rows("Color", include_inactive=True)])
+        self.db.save_piece(fabric(Color="Amber"))
+        self.assertEqual(self.db.get_dropdown(amber)["Use"], 0)
+        row = self.db.get_dropdown(blue)
+        self.db.save_dropdown("FabricPiece", "Color", "", 0, None, blue, row)
+        self.assertEqual(self.db.dropdown_default("Color"), "")
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM, "", "Blue"))
+        set_id = self.db.save_set("Inactive", [amber], "DropDown", "Color")
+        with self.assertRaises(FieldError):
+            self.db.delete_dropdown(amber, amber_row)
+        self.db.delete_dropdown(amber, self.db.get_dropdown(amber))
+        self.assertEqual(self.db.set_members(set_id, "DropDown", "Color"), [])
+        with self.assertRaises(FieldError):
+            self.db.save_dropdown("FabricPiece", "Color", "New", None, 1)
+        with self.assertRaises(FieldError):
+            self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
+        self.db.delete_dropdown(blue, self.db.get_dropdown(blue))
+        self.db.delete_dropdown(blank["ID"], self.db.get_dropdown(blank["ID"]))
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM,))
+
+    def test_version_nine_upgrade_removes_default_index_and_preserves_rows(self):
+        self.db.add_dropdown_item("Color", "Blue")
+        before = self.db.dropdown_rows("Color", include_inactive=True)
+        with self.db.connection:
+            self.db.connection.execute(
+                "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
+                "WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute("PRAGMA user_version = 9")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.dropdown_rows("Color", include_inactive=True), before)
+        self.assertTrue(self.db.upgrade_backup.exists())
+        blue = next(row for row in before if row["ListItem"] == "Blue")
+        _, warning = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, None, blue["ID"], blue)
+        self.assertTrue(warning)
+
     def make_legacy_database(self):
         piece_id = self.db.save_piece(fabric(Color="Sage", StorageLocation="Bin C"))
         self.db.save_set("Keep these", [piece_id])

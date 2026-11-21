@@ -156,7 +156,7 @@ class HelpTextTests(unittest.TestCase):
             for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
-            self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
+            self.db.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
             self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
             self.db.connection.execute("""
                 CREATE TABLE Dropdown (
@@ -213,7 +213,7 @@ class HelpTextTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute(
                 "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (color_set,))
-            self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
+            self.db.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
             self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
             self.db.connection.execute("""
                 CREATE TABLE Dropdown (

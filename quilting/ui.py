@@ -403,8 +403,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.list.tree.selection_remove(self.list.tree.selection())
         self.last_selection = ()
         self.clear_details()
-        self.dropdown_form.variables["ListItem"].set("")
-        self.dropdown_initial = self.dropdown_form.values()
+        self.clear_dropdown_details()
         self.clear_help()
         self.clear_error()
         self.clear_block()
@@ -736,6 +735,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             return self.help_form.values() == self.help_initial or messagebox.askyesno(
                 "Unsaved Changes", "Discard unsaved help text?", parent=self.root.grab_current() or self.root,
             )
+        if screen == "DropDown":
+            return self.allow_dropdown_discard()
         return True
 
     def select_working_list(self, screen, state=None, scope=None, refresh=None):
@@ -772,6 +773,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             Field("TableName", "choice", choices=tuple(self.dropdown_owner_fields), default="FabricPiece"),
             Field("FieldName", "choice", choices=all_fields, default="FabricName"),
             Field("ListItem"),
+            Field("Def", "choice", choices=("", "Set Default", "Clear Default", "Ignore for Update")),
+            Field("Use", "choice", choices=("", "Set Use", "Clear Use", "Ignore for Update")),
         )
         ttk.Label(window, text="Choose a database table or screen, then a field or button. "
                   "FabricPiece choices continue to populate fabric forms.", wraplength=900, padding=8).pack(anchor="w")
@@ -781,8 +784,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.dropdown_form.pack(fill="x")
         actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
         actions.pack(fill="x")
-        self.button(actions, "Add Item", self.add_dropdown)
-        self.button(actions, "Set Default", self.set_dropdown_default)
+        self.button(actions, "Add", self.add_dropdown)
+        self.button(actions, "Update", self.update_dropdown)
+        self.button(actions, "Delete", self.delete_dropdown)
         tools = ttk.Frame(window, padding=(8, 0))
         tools.pack(fill="x")
         self.add_working_list_tools(tools, "DropDown")
@@ -807,7 +811,10 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.dropdown_form.widgets["TableName"].bind(
             "<<ComboboxSelected>>", self.command(self.dropdown_table_changed))
         self.dropdown_form.widgets["FieldName"].bind(
-            "<<ComboboxSelected>>", self.command(self.refresh_dropdowns))
+            "<<ComboboxSelected>>", self.command(self.dropdown_field_changed))
+        tree.bind("<<TreeviewSelect>>", self.command(self.on_dropdown_select))
+        self.dropdown_row = None
+        self.dropdown_selection = ()
         self.dropdown_initial = self.dropdown_form.values()
         self.dropdown_table_changed()
 
@@ -827,6 +834,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         return self.dropdown_table(), self.dropdown_field()
 
     def dropdown_table_changed(self):
+        if not self.allow_dropdown_discard():
+            self.dropdown_form.variables["TableName"].set(self.dropdown_initial["TableName"])
+            return
         table_name = self.dropdown_table()
         fields = self.dropdown_owner_fields[table_name]
         field_name = self.dropdown_form.variables["FieldName"].get()
@@ -838,14 +848,54 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.dropdown_initial["FieldName"] = field_name
         self.refresh_dropdowns()
 
+    def dropdown_field_changed(self):
+        if not self.allow_dropdown_discard():
+            self.dropdown_form.variables["FieldName"].set(self.dropdown_initial["FieldName"])
+            return
+        self.refresh_dropdowns()
+
+    def allow_dropdown_discard(self):
+        values = self.dropdown_form.values()
+        return all(values[name] == self.dropdown_initial[name] for name in ("ListItem", "Def", "Use")) or (
+            messagebox.askyesno("Unsaved Changes", "Discard unsaved dropdown details?",
+                                parent=self.root.grab_current() or self.root))
+
+    def clear_dropdown_details(self):
+        self.dropdown_row = None
+        self.dropdown_selection = ()
+        self.dropdown_list.tree.selection_remove(self.dropdown_list.tree.selection())
+        for name in ("ListItem", "Def", "Use"):
+            self.dropdown_form.variables[name].set("")
+        self.dropdown_initial = self.dropdown_form.values()
+
+    def on_dropdown_select(self):
+        selected = self.dropdown_list.tree.selection()
+        if selected == self.dropdown_selection:
+            return
+        if not self.allow_dropdown_discard():
+            self.dropdown_list.tree.selection_set(self.dropdown_selection)
+            return
+        if len(selected) != 1:
+            self.clear_dropdown_details()
+            self.dropdown_list.tree.selection_set(selected)
+            self.dropdown_selection = selected
+            return
+        self.dropdown_row = self.db.get_dropdown(int(selected[0]))
+        self.dropdown_selection = selected
+        self.dropdown_form.variables["ListItem"].set(self.dropdown_row["ListItem"])
+        self.dropdown_form.variables["Def"].set("Ignore for Update")
+        self.dropdown_form.variables["Use"].set("Ignore for Update")
+        self.dropdown_initial = self.dropdown_form.values()
+
     def refresh_dropdowns(self):
         table_name, field_name = self.dropdown_key()
         state = self.dropdown_states[table_name, field_name]
         order = self.working_list_sort("DropDown", state)
         rows = self.db.dropdown_rows(
-            field_name, state["filters"], state["selected_ids"], order, table_name,
+            field_name, state["filters"], state["selected_ids"], order, table_name, include_inactive=True,
         )
         context = self.list_context(state)
+        self.clear_dropdown_details()
         self.dropdown_list.fill(
             rows, "dropdown records", order, context)
         self.form.refresh_choices()
@@ -853,20 +903,45 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.dropdown_initial["FieldName"] = self.dropdown_form.values()["FieldName"]
 
     def add_dropdown(self):
-        table_name, field_name = self.dropdown_key()
-        self.db.add_dropdown_choice(
-            table_name, field_name, self.dropdown_form.variables["ListItem"].get(),
-        )
-        self.dropdown_form.variables["ListItem"].set("")
-        self.dropdown_initial = self.dropdown_form.values()
-        self.refresh_dropdowns()
+        self.save_dropdown()
 
-    def set_dropdown_default(self):
-        selected = self.dropdown_list.tree.selection()
-        if len(selected) != 1:
+    def update_dropdown(self):
+        self.save_dropdown(self.require_dropdown())
+
+    def require_dropdown(self):
+        if self.dropdown_row is None or self.dropdown_list.tree.selection() != (str(self.dropdown_row["ID"]),):
             raise FieldError("OneRecord", "Dropdown")
-        self.db.set_dropdown_default(int(selected[0]))
+        return self.dropdown_row["ID"]
+
+    def save_dropdown(self, item_id=None):
+        table_name, field_name = self.dropdown_key()
+        values = self.dropdown_form.values()
+        flags = {"Set Default": 1, "Clear Default": 0, "Set Use": 1, "Clear Use": 0,
+                 "Ignore for Update": None, "": None}
+        if values["Def"] not in ("", "Set Default", "Clear Default", "Ignore for Update"):
+            raise FieldError("Choice", "Def")
+        if values["Use"] not in ("", "Set Use", "Clear Use", "Ignore for Update"):
+            raise FieldError("Choice", "Use")
+        _, warning = self.db.save_dropdown(
+            table_name, field_name, values["ListItem"], flags[values["Def"]], flags[values["Use"]],
+            item_id, self.dropdown_row if item_id is not None else None,
+        )
         self.refresh_dropdowns()
+        if warning:
+            messagebox.showwarning(
+                "Multiple Defaults", "This list has more than one default. "
+                "Only the first active default alphabetically is used; clear the others.",
+                parent=self.root,
+            )
+
+    def delete_dropdown(self):
+        item_id = self.require_dropdown()
+        if not self.allow_dropdown_discard():
+            return
+        if messagebox.askyesno("Delete Dropdown Item", "Delete the highlighted dropdown item?",
+                               parent=self.root):
+            self.db.delete_dropdown(item_id, self.dropdown_row)
+            self.refresh_dropdowns()
 
     def build_helptext(self):
         ttk.Label(self.help_page, text="HelpText", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")

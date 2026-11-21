@@ -19,7 +19,7 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 8 prompt for a backed-up
+automatically. Databases with schema versions 1 through 9 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
 working-list selections, Quilt Backs planning, generalized dropdown keys and
 QuiltBlock/Quilt design; declining leaves the
@@ -251,7 +251,8 @@ quantity/mapping changes before planning, and regenerate after inventory changes
 
 Fabric Name, Color, Pattern Name and Storage Location use database-backed,
 read-only selection lists. Their order is **default first, Add Item second,
-then the remaining values alphabetically**, ignoring case. Initially the default
+then the remaining values alphabetically**, ignoring case. With no active default,
+Add Item comes first, followed by the active values alphabetically. Initially the default
 is blank. Choose **Add Item** to enter a value without leaving the fabric form;
 Cancel leaves the previous value intact. Names differing only in ASCII letter
 case or surrounding whitespace reuse the existing spelling rather than creating
@@ -259,13 +260,21 @@ duplicates. Saving fabric also registers/canonicalizes these values at the
 database boundary.
 
 Open **DropDown** from the navigation bar and choose a database **Table Name** or
-application screen, then its **Field Name** or button name; **List Item** adds a value
-for that key. Values are listed and saved per key. FabricPiece dropdown fields continue
-to populate fabric forms; other table/screen keys are stored independently. Highlight
-an item and use **Set Default** to mark the default for that key. The next cleared/new
-fabric form uses its existing FabricPiece field default; existing records are not
-changed. Def and Use are five-character columns, and unused list width remains at the
-right edge. Navigating away from Fabric discards unsaved form values after confirmation.
+application screen, then its **Field Name** or button name. Enter a **List Item**
+and choose **Set Default** or **Clear Default**, and **Set Use** or **Clear Use**,
+then choose **Add**. Highlight a row to **Update** or **Delete** it; on update,
+each flag may be left unchanged with **Ignore for Update**. Blank List Item on update
+leaves its value unchanged. Delete requires confirmation and removes the item from
+saved dropdown selection sets, not existing fabric records. Saving fabric registers
+its values and can recreate a deleted choice.
+
+Values are stored per key, and inactive items remain visible for maintenance but
+are excluded from fabric selection lists. A list can have no default. If multiple
+items are marked default, a warning appears on Add or Update; the first active
+default alphabetically is used and the others are ignored until corrected. The next
+cleared/new fabric form uses that default (or a blank value if none); existing records
+are not changed. Def and Use are five-character columns. Navigating away from Fabric
+discards unsaved form values after confirmation.
 Grain Direction, Print Direction and Status get their defaults from the same
 `Dropdown` table, but keep their defined choices: arbitrary directions or stock
 statuses cannot be added.

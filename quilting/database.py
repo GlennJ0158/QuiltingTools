@@ -24,7 +24,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 BLOCK_SCHEMA = """
 CREATE TABLE QuiltBlock (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,8 +154,6 @@ CREATE TABLE Dropdown (
     Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
     UNIQUE(TableName, FieldName, ListItem)
 );
-CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName)
-    WHERE Def = 1 AND Use = 1;
 """
 BACK_SCHEMA = """
 CREATE TABLE QuiltBack (
@@ -364,7 +362,7 @@ class Database:
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
                   and self.connection.execute("PRAGMA user_version").fetchone()[0] in
-                  (1, 2, 3, 4, 5, 6, 7, 8)):
+                  (1, 2, 3, 4, 5, 6, 7, 8, 9)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -383,7 +381,7 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION)
+                or version not in ((1, 2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION)
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
@@ -422,13 +420,13 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5, 6, 7, 8):
+            if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
                       + (HELP_SCHEMA if version < 3 else "")
                       + (ERROR_SCHEMA if version < 4 else "")
                       + (WORKING_LIST_SCHEMA if version < 5 else "")
-                      + (BACK_SCHEMA if version < 6 else "") + BLOCK_SCHEMA)
+                      + (BACK_SCHEMA if version < 6 else "") + (BLOCK_SCHEMA if version < 9 else ""))
             if 5 <= version < 7:
                 self.connection.execute("ALTER TABLE WorkingListMember RENAME TO OldWorkingListMember")
                 self.connection.execute("ALTER TABLE WorkingListSet RENAME TO OldWorkingListSet")
@@ -443,6 +441,8 @@ class Database:
                 self.connection.execute("DROP TABLE OldWorkingListSet")
             if 2 <= version < 8:
                 self._upgrade_dropdown_schema(version)
+            elif version >= 8:
+                self.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
             if version == 1:
                 self._seed_dropdowns()
                 message = next(message for message in MESSAGES if message[0] == "Measurement")
@@ -616,7 +616,7 @@ class Database:
                 for row in self.connection.execute(f'SELECT DISTINCT "{name}" FROM FabricPiece ORDER BY ID'):
                     self._dropdown_item(name, row[0])
 
-    def _dropdown_item(self, name, value):
+    def _dropdown_item(self, name, value, reactivate=False):
         field = DROPDOWN_FIELDS.get(name)
         if field is None:
             raise FieldError("Choice", "FieldName")
@@ -628,7 +628,8 @@ class Database:
             "AND ListItem = ? COLLATE NOCASE", (name, clean),
         ).fetchone()
         if row is not None:
-            self.connection.execute("UPDATE Dropdown SET Use = 1 WHERE ID = ?", (row["ID"],))
+            if reactivate:
+                self.connection.execute("UPDATE Dropdown SET Use = 1 WHERE ID = ?", (row["ID"],))
             return row["ListItem"]
         self.connection.execute(
             "INSERT INTO Dropdown (TableName, FieldName, ListItem) VALUES ('FabricPiece', ?, ?)",
@@ -640,7 +641,7 @@ class Database:
         if not isinstance(value, str) or not value.strip():
             raise FieldError("Required", name)
         with self.connection:
-            return self._dropdown_item(name, value)
+            return self._dropdown_item(name, value, reactivate=True)
 
     def add_dropdown_choice(self, table_name, field_name, value):
         if table_name == "FabricPiece" and field_name in DROPDOWN_FIELDS:
@@ -664,14 +665,17 @@ class Database:
             )
         return clean
 
-    def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None, table_name="FabricPiece"):
+    def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None, table_name="FabricPiece",
+                      include_inactive=False):
         if (table_name not in DROPDOWN_SCOPE_FIELDS
                 or name not in DROPDOWN_SCOPE_FIELDS[table_name]):
             raise FieldError("Choice", "FieldName")
         values = {field.name: "" for field in DROPDOWN_FILTER_FIELDS} if filters is None else filters
         clean = validate_fields(DROPDOWN_FILTER_FIELDS, values)
         order = self.load_sort("DropDownSort") if sort is None else normalize_sort(sort, DROPDOWN_COLUMNS)
-        clauses, args = ["TableName = ?", "FieldName = ?", "Use = 1"], [table_name, name]
+        clauses, args = ["TableName = ?", "FieldName = ?"], [table_name, name]
+        if not include_inactive:
+            clauses.append("Use = 1")
         if clean["ListItem"]:
             clauses.append("instr(lower(ListItem), lower(?)) > 0")
             args.append(clean["ListItem"])
@@ -691,19 +695,85 @@ class Database:
         return rows
 
     def dropdown_default(self, name):
-        rows = self.dropdown_rows(name)
-        defaults = [row["ListItem"] for row in rows if row["Def"]]
-        if len(defaults) != 1:
-            raise FieldError("DatabaseFormat", name, detail="Exactly one active dropdown default is required.")
-        return defaults[0]
+        rows = self.dropdown_rows(name, sort=(("ListItem", "asc"),))
+        return next((row["ListItem"] for row in rows if row["Def"]), "")
 
     def dropdown_choices(self, name):
-        rows = self.dropdown_rows(name)
-        default = self.dropdown_default(name)
-        remaining = [row["ListItem"] for row in rows if row["ListItem"] != default]
+        rows = self.dropdown_rows(name, sort=(("ListItem", "asc"),))
+        default_row = next((row for row in rows if row["Def"]), None)
+        remaining = [row["ListItem"] for row in rows if row is not default_row]
+        leading = (default_row["ListItem"],) if default_row is not None else ()
         if DROPDOWN_FIELDS[name].kind == "dropdown":
-            return (default, ADD_ITEM, *remaining)
-        return (default, *remaining)
+            return (*leading, ADD_ITEM, *remaining)
+        return (*leading, *remaining)
+
+    def get_dropdown(self, item_id):
+        row = self.connection.execute("SELECT * FROM Dropdown WHERE ID = ?", (item_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "DropdownID")
+        return dict(row)
+
+    def save_dropdown(self, table_name, field_name, value, default, use, item_id=None, original=None):
+        if field_name not in DROPDOWN_SCOPE_FIELDS.get(table_name, ()):
+            raise FieldError("Choice", "FieldName")
+        adding = item_id is None
+        flag_choices = ((0, 1) if adding else (None, 0, 1))
+        if default not in flag_choices or use not in flag_choices:
+            raise FieldError("Required" if adding and (default is None or use is None) else "Choice",
+                             "Def" if default not in flag_choices else "Use")
+        with self._write_transaction():
+            row = None if adding else self.get_dropdown(item_id)
+            if row is not None:
+                if original != row:
+                    raise FieldError("Conflict", "DropdownID")
+                if (row["TableName"], row["FieldName"]) != (table_name, field_name):
+                    raise FieldError("Choice", "FieldName")
+            clean = validate_fields((Field("ListItem", required=adding),), {"ListItem": value})["ListItem"]
+            if not clean and row is not None:
+                clean = row["ListItem"]
+            if clean.casefold() == ADD_ITEM.casefold():
+                raise FieldError("Choice", "ListItem")
+            if table_name == "FabricPiece" and field_name in DROPDOWN_FIELDS and (
+                    clean or row is None or row["ListItem"] != ""):
+                field = DROPDOWN_FIELDS[field_name]
+                clean = validate_fields((field,), {field_name: clean})[field_name]
+            duplicate = self.connection.execute(
+                "SELECT ID FROM Dropdown WHERE TableName = ? AND FieldName = ? "
+                "AND ListItem = ? COLLATE NOCASE AND ID != ?",
+                (table_name, field_name, clean, item_id if item_id is not None else -1),
+            ).fetchone()
+            if duplicate:
+                raise FieldError("Database", "ListItem", detail="A dropdown item with this name already exists.")
+            if adding:
+                cursor = self.connection.execute(
+                    "INSERT INTO Dropdown (TableName, FieldName, ListItem, Def, Use) VALUES (?, ?, ?, ?, ?)",
+                    (table_name, field_name, clean, default, use),
+                )
+                item_id = cursor.lastrowid
+            else:
+                self.connection.execute(
+                    "UPDATE Dropdown SET ListItem = ?, Def = ?, Use = ? WHERE ID = ?",
+                    (clean, row["Def"] if default is None else default,
+                     row["Use"] if use is None else use, item_id),
+                )
+            saved_default = default if default is not None else row["Def"]
+            multiple_defaults = saved_default == 1 and self.connection.execute(
+                "SELECT count(*) FROM Dropdown WHERE TableName = ? AND FieldName = ? AND Def = 1",
+                (table_name, field_name),
+            ).fetchone()[0] > 1
+            return item_id, multiple_defaults
+
+    def delete_dropdown(self, item_id, original):
+        with self._write_transaction():
+            row = self.get_dropdown(item_id)
+            if row != original:
+                raise FieldError("Conflict", "DropdownID")
+            self.connection.execute(
+                "DELETE FROM WorkingListMember WHERE RecordID = ? AND SelectionSetID IN "
+                "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown' AND ScopeName = ?)",
+                (item_id, self._working_list_scope("DropDown", (row["TableName"], row["FieldName"]))),
+            )
+            self.connection.execute("DELETE FROM Dropdown WHERE ID = ?", (item_id,))
 
     def set_dropdown_default(self, item_id):
         with self.connection:
@@ -773,7 +843,7 @@ class Database:
         return row
 
     @contextmanager
-    def _block_transaction(self):
+    def _write_transaction(self):
         self.connection.execute("BEGIN IMMEDIATE")
         with self.connection:
             yield
@@ -795,7 +865,7 @@ class Database:
 
     def update_block(self, block_id, revision, values):
         clean = parse_block(values)
-        with self._block_transaction():
+        with self._write_transaction():
             self._block_draft(block_id, revision)
             self.connection.execute(
                 "UPDATE QuiltBlock SET BlockName = ?, Description = ?, FinishedWidth = ?, "
@@ -804,13 +874,13 @@ class Database:
             self._touch_block(block_id)
 
     def delete_block(self, block_id, revision):
-        with self._block_transaction():
+        with self._write_transaction():
             self._block_draft(block_id, revision)
             self.connection.execute("DELETE FROM QuiltBlock WHERE ID = ?", (block_id,))
 
     def copy_block(self, block_id):
         timestamp = now()
-        with self._block_transaction():
+        with self._write_transaction():
             source = self.get_block(block_id)
             cursor = self.connection.execute(
                 "INSERT INTO QuiltBlock (ParentID, BlockName, Description, FinishedWidth, FinishedLength, "
@@ -835,7 +905,7 @@ class Database:
 
     def save_block_part(self, block_id, revision, values, part_id=None):
         clean = parse_part(values)
-        with self._block_transaction():
+        with self._write_transaction():
             self._block_draft(block_id, revision)
             if part_id is None:
                 cursor = self.connection.execute(
@@ -861,7 +931,7 @@ class Database:
         return part_id
 
     def delete_block_part(self, block_id, revision, part_id):
-        with self._block_transaction():
+        with self._write_transaction():
             self._block_draft(block_id, revision)
             cursor = self.connection.execute(
                 "DELETE FROM BlockPart WHERE ID=? AND QuiltBlockID=?", (part_id, block_id))
@@ -873,7 +943,7 @@ class Database:
         if (type(x) is not int or type(y) is not int or x < 0 or y < 0
                 or type(rotation) is not int or not 0 <= rotation < 360 or type(mirrored) is not bool):
             raise FieldError("Choice", "BlockPartPlacement")
-        with self._block_transaction():
+        with self._write_transaction():
             self._block_draft(block_id, revision)
             cursor = self.connection.execute(
                 "UPDATE BlockPartPlacement SET X=?, Y=?, Rotation=?, Mirrored=? WHERE ID=? AND "
@@ -884,7 +954,7 @@ class Database:
             self._touch_block(block_id)
 
     def approve_block(self, block_id, revision):
-        with self._block_transaction():
+        with self._write_transaction():
             block = self._block_draft(block_id, revision)
             issues = validate_layout(block, self.block_parts(block_id), self.block_placements(block_id))
             if issues:
@@ -928,7 +998,7 @@ class Database:
     def set_quilt_use(self, quilt_id, revision, block_id, quantity):
         if type(quantity) is not int or not 1 <= quantity <= 10000:
             raise FieldError("Choice", "Quantity")
-        with self._block_transaction():
+        with self._write_transaction():
             self._quilt_revision(quilt_id, revision)
             if self.get_block(block_id)["Status"] != "Approved":
                 raise FieldError("Choice", "QuiltBlock")
@@ -939,7 +1009,7 @@ class Database:
             self._touch_quilt(quilt_id)
 
     def remove_quilt_use(self, quilt_id, revision, block_id):
-        with self._block_transaction():
+        with self._write_transaction():
             self._quilt_revision(quilt_id, revision)
             cursor = self.connection.execute(
                 "DELETE FROM QuiltBlockUse WHERE QuiltID=? AND QuiltBlockID=?", (quilt_id, block_id))
@@ -960,7 +1030,7 @@ class Database:
         valid = {row["ListItem"] for row in self.dropdown_rows("Color")}
         if inventory_color not in valid or not inventory_color:
             raise FieldError("Choice", "InventoryColor")
-        with self._block_transaction():
+        with self._write_transaction():
             self._quilt_revision(quilt_id, revision)
             self.connection.execute(
                 "INSERT OR IGNORE INTO QuiltColorMap (QuiltID, PartColor, InventoryColor) VALUES (?, ?, ?)",
@@ -968,7 +1038,7 @@ class Database:
             self._touch_quilt(quilt_id)
 
     def remove_quilt_mapping(self, quilt_id, revision, part_color, inventory_color):
-        with self._block_transaction():
+        with self._write_transaction():
             self._quilt_revision(quilt_id, revision)
             cursor = self.connection.execute(
                 "DELETE FROM QuiltColorMap WHERE QuiltID=? AND PartColor=? AND InventoryColor=?",
@@ -995,7 +1065,7 @@ class Database:
         return result
 
     def create_quilt_plan(self, quilt_id, revision, selected_ids=None):
-        with self._block_transaction():
+        with self._write_transaction():
             self._quilt_revision(quilt_id, revision)
             records = self.quilt_uses(quilt_id)
             if not records:
@@ -1384,7 +1454,7 @@ class Database:
     def _working_list_rows(self, screen, scope):
         if screen == "DropDown":
             table_name, field_name = json.loads(scope)
-            return self.dropdown_rows(field_name, table_name=table_name)
+            return self.dropdown_rows(field_name, table_name=table_name, include_inactive=True)
         if screen == "History":
             return self.history(int(scope))
         if screen == "Quilt Backs":

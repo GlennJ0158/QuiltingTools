@@ -239,7 +239,7 @@ class ScreenTests(unittest.TestCase):
         style = ttk.Style(self.root)
         self.assertEqual(style.lookup("Entry.TFrame", "background"), "#c3dafd")
         for screen, page, form_name, action_name in (
-            ("DropDown", self.app.dropdown_page, "dropdown_form", "Add Item"),
+            ("DropDown", self.app.dropdown_page, "dropdown_form", "Add"),
             ("HelpText", self.app.help_page, "help_form", "Update"),
             ("Quilt Backs", self.app.backs_page, "back_form", "Set Sketch Color"),
         ):
@@ -411,14 +411,71 @@ class ScreenTests(unittest.TestCase):
         form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
         listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        blank_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
+        listing.tree.selection_set(str(blank_id))
+        self.root.update()
+        form.variables["Def"].set("Clear Default")
+        self.click(window, "Update")
         red_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Red")
         listing.tree.selection_set(str(red_id))
-        self.click(window, "Set Default")
+        self.root.update()
+        form.variables["Def"].set("Set Default")
+        self.click(window, "Update")
         self.app.nav.buttons["Fabric"].invoke()
         self.assertEqual(self.db.get_piece(piece_id)["Color"], "Blue")
         self.app.clear()
         self.assertEqual(self.app.form.variables["Color"].get(), "Red")
         self.errors.assert_not_called()
+
+    def test_dropdown_add_update_delete_and_multiple_default_warning(self):
+        warning = patch("quilting.ui.messagebox.showwarning").start()
+        self.app.open_dropdowns()
+        form = self.app.dropdown_form
+        form.variables["FieldName"].set("Color")
+        form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        form.variables["ListItem"].set("Blue")
+        self.click(self.app.dropdown_page, "Add")
+        self.assertEqual(self.errors.call_count, 1)
+        form.variables["Def"].set("Set Default")
+        form.variables["Use"].set("Set Use")
+        self.click(self.app.dropdown_page, "Add")
+        warning.assert_called_once()
+        blue = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
+        self.app.dropdown_list.tree.selection_set(str(blue["ID"]))
+        self.root.update()
+        self.assertEqual(form.variables["Def"].get(), "Ignore for Update")
+        form.variables["Use"].set("Clear Use")
+        self.click(self.app.dropdown_page, "Update")
+        self.assertEqual(self.db.get_dropdown(blue["ID"])["Use"], 0)
+        self.assertNotIn("Blue", self.db.dropdown_choices("Color"))
+        self.app.dropdown_list.tree.selection_set(str(blue["ID"]))
+        self.root.update()
+        self.click(self.app.dropdown_page, "Delete")
+        with self.assertRaises(FieldError):
+            self.db.get_dropdown(blue["ID"])
+
+    def test_dropdown_draft_survives_cancelled_selection_and_scope_changes(self):
+        self.db.add_dropdown_item("Color", "Blue")
+        self.app.open_dropdowns()
+        form = self.app.dropdown_form
+        form.variables["FieldName"].set("Color")
+        form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        blue = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
+        blank = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
+        self.app.dropdown_list.tree.selection_set(str(blue["ID"]))
+        self.root.update()
+        form.variables["ListItem"].set("Draft")
+        self.confirm.return_value = False
+        self.app.dropdown_list.tree.selection_set(str(blank["ID"]))
+        self.root.update()
+        self.assertEqual(self.app.dropdown_list.tree.selection(), (str(blue["ID"]),))
+        form.variables["FieldName"].set("PatternName")
+        form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(form.variables["FieldName"].get(), "Color")
+        self.assertEqual(form.variables["ListItem"].get(), "Draft")
 
     def test_metadata_and_history_times_have_minute_precision_only(self):
         piece_id = self.add_piece()
@@ -937,7 +994,7 @@ class ScreenTests(unittest.TestCase):
     def test_dropdown_screen_edits_table_or_screen_key_and_compacts_columns(self):
         self.app.show_screen("DropDown")
         self.assertEqual(tuple(field.name for field in self.app.dropdown_form.fields),
-                         ("TableName", "FieldName", "ListItem"))
+                         ("TableName", "FieldName", "ListItem", "Def", "Use"))
         self.app.dropdown_form.variables["TableName"].set("HelpText")
         self.app.dropdown_form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
@@ -945,7 +1002,9 @@ class ScreenTests(unittest.TestCase):
         self.app.dropdown_form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
         self.app.dropdown_form.variables["ListItem"].set("Apply help changes")
-        self.click(self.app.dropdown_page, "Add Item")
+        self.app.dropdown_form.variables["Def"].set("Clear Default")
+        self.app.dropdown_form.variables["Use"].set("Set Use")
+        self.click(self.app.dropdown_page, "Add")
         row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
         self.assertEqual((row["TableName"], row["FieldName"], row["ListItem"]),
                          ("HelpText", "Update", "Apply help changes"))
