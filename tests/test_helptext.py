@@ -127,6 +127,9 @@ class HelpTextTests(unittest.TestCase):
         })
         self.db.save_set("Existing errors", [message_id], "ErrorMessage")
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE WorkingListMember")
@@ -150,6 +153,9 @@ class HelpTextTests(unittest.TestCase):
                         if row["ListItem"] == color)
         set_id = self.db.save_set("Blue colors", [color_id], "DropDown", "Color")
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
             self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
             self.db.connection.execute("""
@@ -202,6 +208,9 @@ class HelpTextTests(unittest.TestCase):
         color_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
         color_set = self.db.save_set("Colors", [color_id], "DropDown", "Color")
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute(
                 "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (color_set,))
             self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
@@ -241,6 +250,9 @@ class HelpTextTests(unittest.TestCase):
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("WorkingListMember", "WorkingListSet",

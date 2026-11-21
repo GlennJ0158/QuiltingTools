@@ -20,6 +20,8 @@ from .database import (
     DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
     HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database,
 )
+from .block_ui import BlockScreenMixin
+from .quilt_ui import QuiltScreenMixin
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import (
     BACK_COLUMNS, BACK_FILTER_FIELDS, BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
@@ -233,7 +235,7 @@ class RecordList(ttk.Frame):
         for row in rows:
             values = [
                 display_measurement(row[name]) if name in (
-                    "UsableWidth", "UsableLength", "BackWidth", "BackLength",
+                    "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else row[name] for name in self.columns
@@ -243,7 +245,7 @@ class RecordList(ttk.Frame):
         self.heading.configure(text=f"{len(rows)} {noun} selected; Sort: {order}{context}")
 
 
-class Application:
+class Application(BlockScreenMixin, QuiltScreenMixin):
     def __init__(self, root, database):
         self.root, self.db = root, database
         root.help_owner = self
@@ -272,10 +274,13 @@ class Application:
         self.inventory_page = body
         self.dropdown_page = ttk.Frame(self.pages, padding=8)
         self.backs_page = ttk.Frame(self.pages, padding=8)
+        self.block_page = ttk.Frame(self.pages, padding=8)
+        self.quilt_page = ttk.Frame(self.pages, padding=8)
         self.help_page = ttk.Frame(self.pages, padding=8)
         self.error_page = ttk.Frame(self.pages, padding=8)
         self.setup_page = ttk.Frame(self.pages, padding=12)
-        self.screens = {"Fabric": body, "Quilt Backs": self.backs_page, "DropDown": self.dropdown_page,
+        self.screens = {"Fabric": body, "Quilt Backs": self.backs_page, "QuiltBlock": self.block_page,
+                        "Quilt": self.quilt_page, "DropDown": self.dropdown_page,
                         "HelpText": self.help_page, "ErrorMessage": self.error_page, "Setup": self.setup_page}
         for name, page in self.screens.items():
             page.help_screen = name
@@ -325,6 +330,8 @@ class Application:
         self.build_helptext()
         self.build_errors()
         self.build_backs()
+        self.build_blocks()
+        self.build_quilts()
 
     def context(self, widget):
         while widget is not None:
@@ -366,6 +373,11 @@ class Application:
             forms.append((self.dropdown_form, self.dropdown_initial))
         elif self.current == "Quilt Backs":
             forms.append((self.back_form, self.back_initial))
+        elif self.current == "QuiltBlock":
+            forms.append((self.block_form, self.block_initial))
+        elif self.current == "Quilt":
+            forms.extend(((self.quilt_form, self.quilt_initial),
+                          (self.quilt_name_form, self.quilt_name_initial)))
         elif self.current == "HelpText":
             forms.append((self.help_form, self.help_initial))
         elif self.current == "ErrorMessage":
@@ -393,6 +405,11 @@ class Application:
         self.dropdown_initial = self.dropdown_form.values()
         self.clear_help()
         self.clear_error()
+        self.clear_block()
+        self.quilt_form.defaults()
+        self.quilt_initial = self.quilt_form.values()
+        self.quilt_name_form.defaults()
+        self.quilt_name_initial = self.quilt_name_form.values()
         if name == "Fabric":
             self.refresh()
         elif name == "DropDown":
@@ -400,6 +417,12 @@ class Application:
         elif name == "Quilt Backs":
             self.refresh_back_stock()
             self.refresh_backs()
+        elif name == "QuiltBlock":
+            self.refresh_blocks()
+        elif name == "Quilt":
+            self.refresh_quilts()
+            if self.quilt_id is not None:
+                self.load_quilt(self.quilt_id)
         elif name == "HelpText":
             self.refresh_help()
         elif name == "ErrorMessage":

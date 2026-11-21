@@ -2,8 +2,9 @@
 
 from .model import FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, SORT_FIELDS, Field
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
+from .blocks import BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, PART_FIELDS
 
-NAVIGATION = ("Fabric", "Quilt Backs", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
+NAVIGATION = ("Fabric", "Quilt Backs", "QuiltBlock", "Quilt", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
 DROPDOWN_FORM_FIELDS = (
     Field("TableName", "choice"),
     Field("FieldName", "choice"),
@@ -39,6 +40,25 @@ HISTORY_FILTER_FIELDS = (
 )
 
 SCREEN_HELP = {
+    "Quilt": ("Compose a quilt and plan its cuts.", "Create or select a quilt; choose approved block "
+              "versions and their quantities. Map each part color to one or more inventory color "
+              "values, then choose Plan Quilt. Plans pack conservative cut bounding rectangles, "
+              "can report shortages and do not reserve or change inventory. Existing plans are "
+              "snapshots; regenerate after changes. Print Quilt Plan prints the saved plan."),
+    "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
+                   "instance's position and orientation in Sketch, then approve a fully covered, "
+                   "non-overlapping layout. Approved blocks are immutable; New Version copies one "
+                   "to an independent draft. Scale changes finished dimensions, not seam allowance."),
+    "Block Parts": ("Maintain a block's part definitions.", "Choose one supported shape and enter its "
+                    "finished dimensions, color and number per block. Triangle a is the horizontal base; "
+                    "b and c meet its left and right ends. Circles and semicircles use diameter."),
+    "Block Sketch": ("Arrange each part instance.", "Choose a part instance, enter its unscaled base "
+                     "position, rotation and mirror setting, then Save Placement. The displayed sketch "
+                     "uses the block scale. Approval requires no overlap, gaps or out-of-bounds areas."),
+    "QuiltBlock Filter": ("Filter the block list.", "Match literal name text and optional status."),
+    "QuiltBlock Sort": ("Sort the block list.", "Choose distinct columns and ascending or descending order."),
+    "QuiltBlock Set": ("Save or apply a block selection.", "Named sets contain listed block IDs; "
+                       "deleting a set never deletes blocks."),
     "Fabric": (
         "Maintain one record for each physical usable fabric rectangle.",
         "Enter usable dimensions in inches, excluding selvage and damaged edges. Highlight one row "
@@ -226,6 +246,21 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
+    "QuiltName": ("Name a quilt project.", "Required name, up to 120 characters."),
+    "SavedQuilt": ("Choose a saved quilt.", "Select a saved quilt to review its composition and plans."),
+    "ApprovedBlock": ("Choose an approved block version.", "Choose one approved block and set its quantity."),
+    "Quantity": ("Enter the number of blocks.", "Enter an integer from 1 through 10,000."),
+    "InventoryColor": ("Select a fabric inventory color.", "Map each part color to one or more inventory colors."),
+    "SavedQuiltPlan": ("Choose a saved cutting plan.", "Saved plans are snapshots and do not reserve fabric."),
+    "QuiltPlanDetails": ("Review the cutting plan.", "Shows source IDs, allocations, cutting bounds and shortages."),
+    **{field.name: (f"Enter {field.label.lower()}.", f"Enter the {field.label.lower()} for this block or part.")
+       for field in (*BLOCK_FIELDS, *PART_FIELDS)},
+    "Placement": ("Choose an instance to position.", "Select a numbered part instance."),
+    "PositionX": ("Enter its horizontal position.", "Unscaled distance from the left edge in inches."),
+    "PositionY": ("Enter its vertical position.", "Unscaled distance from the top edge in inches."),
+    "Rotation": ("Rotate the selected instance.", "Enter a whole number of degrees from 0 to 359."),
+    "Mirror": ("Mirror the selected instance.", "Mirror horizontally before rotation."),
+    "BlockSketch": ("Finished-size block sketch.", "Position each instance using the placement controls."),
     "ErrorText": ("Enter the error message or template.", "Required plain text up to 4,000 characters. "
                   "Braces identify variable runtime details. Editing this troubleshooting reference "
                   "does not change the message displayed by the program."),
@@ -296,6 +331,23 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
+    "Quilt": ("Open quilt planning.", "Compose quilts and create non-consuming cutting plans."),
+    "Add Quilt": ("Save a new quilt project.", "Enter a name and create an independent quilt."),
+    "Set Block Quantity": ("Add or update a block quantity.", "Choose an approved version and its required count."),
+    "Remove Block": ("Remove the selected block from the quilt.", "This never deletes the block version."),
+    "Map Color": ("Map a part color to an inventory color.", "A part color can map to multiple inventory colors."),
+    "Remove Mapping": ("Remove the chosen color mapping.", "Removing a mapping does not change inventory."),
+    "Plan Quilt": ("Generate a cutting plan.", "Allocate part cut bounds to matching available fabric; "
+                   "the saved plan reports unfilled demand and does not change inventory."),
+    "Print Quilt Plan": ("Print the selected cutting plan.", "Save an HTML report at a new path and print in a browser."),
+    "QuiltBlock": ("Open block design.", "Maintain and approve reusable block definitions."),
+    "New Version": ("Copy the block to a draft version.", "The source version remains unchanged."),
+    "Parts": ("Open part maintenance.", "Add, update or delete part definitions on a draft."),
+    "Sketch": ("Open the editable sketch.", "Position and orient each part instance."),
+    "Approve": ("Approve a complete layout.", "Approval requires all instances and no gaps, overlap or overflow."),
+    "Save Placement": ("Save the selected placement.", "Persist the part instance position and orientation."),
+    "Print Sketch": ("Print this block sketch.", "Save an HTML report at a new filename; "
+                     "the report includes finished shapes and bounding cut dimensions."),
     "ErrorMessage": ("Open error-message maintenance.", "Switch to the searchable troubleshooting reference."),
     "Delete": ("Delete the highlighted reference message.", "Highlight exactly one message. After "
                "confirmation, delete its reference entry and saved-set memberships, not runtime ErrorText."),
@@ -376,6 +428,16 @@ BUTTON_HELP = {
 }
 
 SCREEN_FIELDS = {
+    "Quilt": (Field("QuiltName"), Field("SavedQuilt"), Field("ApprovedBlock"), Field("Quantity"),
+              Field("PartColor"), Field("InventoryColor"), Field("SavedQuiltPlan"), Field("QuiltPlanDetails")),
+    "QuiltBlock": BLOCK_FIELDS,
+    "Block Parts": PART_FIELDS,
+    "Block Sketch": (Field("BlockSketch"), Field("Placement"), Field("PositionX"), Field("PositionY"),
+                     Field("Rotation"), Field("Mirror")),
+    "QuiltBlock Filter": BLOCK_FILTER_FIELDS,
+    "QuiltBlock Sort": tuple(field for index in range(1, len(BLOCK_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "QuiltBlock Set": (Field("SavedSet"), Field("SetName")),
     "ErrorMessage": ERROR_FIELDS,
     "Error Filter": ERROR_FILTER_FIELDS,
     "Error Sort": tuple(field for index in range(1, len(ERROR_COLUMNS) + 1) for field in (
@@ -416,6 +478,8 @@ SCREEN_FIELDS = {
     "Screen Help": (Field("HelpContent"),),
 }
 SCREEN_COLUMNS = {
+    "QuiltBlock": BLOCK_COLUMNS,
+    "Block Parts": ("ID", "PartName", "Shape", "PartColor", "NumberInBlock"),
     "ErrorMessage": ERROR_COLUMNS,
     "Fabric": LIST_COLUMNS,
     "DropDown": DROPDOWN_COLUMNS,
@@ -427,6 +491,15 @@ SCREEN_COLUMNS = {
     ))),
 }
 SCREEN_BUTTONS = {
+    "Quilt": ("Add Quilt", "Set Block Quantity", "Remove Block", "Map Color", "Remove Mapping",
+              "Plan Quilt", "Print Quilt Plan"),
+    "QuiltBlock": ("Add", "Update", "Delete", "Clear", "New Version", "Parts", "Sketch", "Approve",
+                   "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
+    "Block Parts": ("Add", "Update", "Delete", "Clear", "Close"),
+    "Block Sketch": ("Save Placement", "Print Sketch", "Close"),
+    "QuiltBlock Filter": ("Apply", "Clear Fields", "Cancel"),
+    "QuiltBlock Sort": ("Apply", "Clear Fields", "Cancel"),
+    "QuiltBlock Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "ErrorMessage": ("Add", "Update", "Delete", "Clear", "Select Highlighted", "Filter",
                      "Set Selection", "Reset Selection", "Sort", "Refresh", "Print"),
     "Error Filter": ("Apply", "Clear Fields", "Cancel"),
@@ -462,6 +535,7 @@ SCREEN_BUTTONS = {
     "Screen Help": ("Close",),
 }
 COLUMN_HELP = {
+    "Revision": ("Saved revision number.", "Changes whenever this block or its parts are saved."),
     "ID": ("Unique saved record number.", "Database-generated identity for this record; not a row "
            "count or list position. The identity remains stable when the list is sorted."),
     "Def": ("Whether this item is the key's default.", "1 marks the active default; 0 means it "
@@ -520,6 +594,19 @@ def default_help():
                     "Reset Selection": ("Show all saved reference messages.", "Clear text filters "
                                         "and saved-set/highlight restrictions without deleting messages."),
                 }[button]
+            if screen == "QuiltBlock" and button in ("Add", "Update", "Delete", "Filter", "Sort"):
+                hover, full = {
+                    "Add": ("Save a new block draft.", "Save the entered block as a new independent draft."),
+                    "Update": ("Save the selected draft.", "Save block details if the revision is current. "
+                               "Approved versions cannot be changed."),
+                    "Delete": ("Delete the selected draft.", "After confirmation, delete this draft and its "
+                               "parts. Approved versions cannot be deleted."),
+                    "Filter": SCREEN_HELP["QuiltBlock Filter"],
+                    "Sort": SCREEN_HELP["QuiltBlock Sort"],
+                }[button]
+            if screen == "Block Parts" and button in ("Add", "Update", "Delete", "Clear"):
+                hover, full = (f"{button} a part definition.", "Maintain a draft's finished-size part "
+                               "definitions and their individual placements.")
             if screen in ("DropDown", "HelpText", "History", "Quilt Backs") and button in (
                     "Filter", "Set Selection", "Sort", "Reset Selection"):
                 if button == "Set Selection":
@@ -534,7 +621,8 @@ def default_help():
                                "current working list remain unchanged.")
             rows[screen, f"Button:{button}"] = hover, full
         for field in SCREEN_FIELDS.get(screen, ()):
-            if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort", "Quilt Backs Sort"):
+            if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort",
+                          "QuiltBlock Sort", "Quilt Backs Sort"):
                 pair = (("Choose a distinct field for this priority.",
                          "Choose a list column; earlier rows have higher priority. Leave unused "
                          "rows blank. ID is appended as a tie-breaker.") if field.name.startswith("SortField")
@@ -551,6 +639,10 @@ def default_help():
                                   "can also identify a value list."),
                     "ListItem": COLUMN_HELP["ListItem"],
                 }[field.name]
+            elif screen == "QuiltBlock" and field.name == "Description":
+                pair = ("Describe this block.", "Optional block description, up to 4,000 characters.")
+            elif screen == "QuiltBlock Filter":
+                pair = SCREEN_HELP["QuiltBlock Filter"]
             elif screen == "Error Filter":
                 pair = (f"Search {field.label.lower()}.",
                         "Blank means no restriction. Match literal text anywhere in this field, "
