@@ -4,10 +4,13 @@ import json
 import os
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .backs import MAX_PANELS, MINIMUM_PART, PALETTE
+from .blocks import BLOCK_COLUMNS, BLOCK_FILTER_FIELDS, parse_block, parse_part, validate_layout
+from .quilt_planner import plan_quilt
 from .helptext import (
     DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
     HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, default_help,
@@ -19,7 +22,83 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+BLOCK_SCHEMA = """
+CREATE TABLE QuiltBlock (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    ParentID INTEGER REFERENCES QuiltBlock(ID),
+    BlockName TEXT NOT NULL CHECK(length(trim(BlockName)) BETWEEN 1 AND 120),
+    Description TEXT NOT NULL CHECK(length(Description) <= 4000),
+    FinishedWidth INTEGER NOT NULL CHECK(FinishedWidth > 0),
+    FinishedLength INTEGER NOT NULL CHECK(FinishedLength > 0),
+    Scale TEXT NOT NULL,
+    SeamAllowance INTEGER NOT NULL CHECK(SeamAllowance >= 0),
+    Status TEXT NOT NULL CHECK(Status IN ('Draft', 'Approved')),
+    Revision INTEGER NOT NULL DEFAULT 1 CHECK(Revision > 0),
+    DateCreated TEXT NOT NULL,
+    DateModified TEXT NOT NULL
+);
+CREATE TABLE BlockPart (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    QuiltBlockID INTEGER NOT NULL REFERENCES QuiltBlock(ID) ON DELETE CASCADE,
+    PartName TEXT NOT NULL,
+    Shape TEXT NOT NULL,
+    PartColor TEXT NOT NULL,
+    NumberInBlock INTEGER NOT NULL CHECK(NumberInBlock BETWEEN 1 AND 1000),
+    PartWidth INTEGER,
+    PartLength INTEGER,
+    SideA INTEGER,
+    SideB INTEGER,
+    SideC INTEGER,
+    Diameter INTEGER
+);
+CREATE TABLE BlockPartPlacement (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    BlockPartID INTEGER NOT NULL REFERENCES BlockPart(ID) ON DELETE CASCADE,
+    Instance INTEGER NOT NULL CHECK(Instance > 0),
+    X INTEGER NOT NULL CHECK(X >= 0),
+    Y INTEGER NOT NULL CHECK(Y >= 0),
+    Rotation INTEGER NOT NULL CHECK(Rotation BETWEEN 0 AND 359),
+    Mirrored INTEGER NOT NULL CHECK(Mirrored IN (0, 1)),
+    UNIQUE(BlockPartID, Instance)
+);
+CREATE TABLE BlockSet (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    SetName TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(trim(SetName)) BETWEEN 1 AND 120),
+    DateCreated TEXT NOT NULL
+);
+CREATE TABLE BlockSetMember (
+    SelectionSetID INTEGER NOT NULL REFERENCES BlockSet(ID) ON DELETE CASCADE,
+    QuiltBlockID INTEGER NOT NULL REFERENCES QuiltBlock(ID) ON DELETE CASCADE,
+    PRIMARY KEY (SelectionSetID, QuiltBlockID)
+);
+CREATE TABLE Quilt (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    QuiltName TEXT NOT NULL CHECK(length(trim(QuiltName)) BETWEEN 1 AND 120),
+    Revision INTEGER NOT NULL DEFAULT 1 CHECK(Revision > 0),
+    DateCreated TEXT NOT NULL,
+    DateModified TEXT NOT NULL
+);
+CREATE TABLE QuiltBlockUse (
+    QuiltID INTEGER NOT NULL REFERENCES Quilt(ID) ON DELETE CASCADE,
+    QuiltBlockID INTEGER NOT NULL REFERENCES QuiltBlock(ID),
+    Quantity INTEGER NOT NULL CHECK(Quantity BETWEEN 1 AND 10000),
+    PRIMARY KEY (QuiltID, QuiltBlockID)
+);
+CREATE TABLE QuiltColorMap (
+    QuiltID INTEGER NOT NULL REFERENCES Quilt(ID) ON DELETE CASCADE,
+    PartColor TEXT NOT NULL,
+    InventoryColor TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (QuiltID, PartColor, InventoryColor)
+);
+CREATE TABLE QuiltPlan (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    QuiltID INTEGER NOT NULL REFERENCES Quilt(ID),
+    QuiltRevision INTEGER NOT NULL,
+    PlanData TEXT NOT NULL,
+    DateCreated TEXT NOT NULL
+);
+"""
 ERROR_SCHEMA = """
 CREATE TABLE ErrorMessage (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,7 +256,7 @@ CREATE TABLE ScreenState (
 );
 CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
-""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA + BACK_SCHEMA
+""" + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA + BACK_SCHEMA + BLOCK_SCHEMA
 TABLE_COLUMNS = {
     "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
@@ -207,6 +286,17 @@ TABLE_COLUMNS = {
         "QuiltBackID", "FabricPieceID", "SourceRevision", "BeforeValues", "AfterValues",
         "PlannedCutArea", "RemnantPieceID",
     ),
+    "QuiltBlock": ("ID", "ParentID", "BlockName", "Description", "FinishedWidth", "FinishedLength",
+                   "Scale", "SeamAllowance", "Status", "Revision", "DateCreated", "DateModified"),
+    "BlockPart": ("ID", "QuiltBlockID", "PartName", "Shape", "PartColor", "NumberInBlock",
+                  "PartWidth", "PartLength", "SideA", "SideB", "SideC", "Diameter"),
+    "BlockPartPlacement": ("ID", "BlockPartID", "Instance", "X", "Y", "Rotation", "Mirrored"),
+    "BlockSet": ("ID", "SetName", "DateCreated"),
+    "BlockSetMember": ("SelectionSetID", "QuiltBlockID"),
+    "Quilt": ("ID", "QuiltName", "Revision", "DateCreated", "DateModified"),
+    "QuiltBlockUse": ("QuiltID", "QuiltBlockID", "Quantity"),
+    "QuiltColorMap": ("QuiltID", "PartColor", "InventoryColor"),
+    "QuiltPlan": ("ID", "QuiltID", "QuiltRevision", "PlanData", "DateCreated"),
 }
 SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
@@ -216,10 +306,12 @@ SAVED_SORTS = {
     "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
     "HistorySort": (("ID", "Action", "DateCreated"),
                     (("ID", "desc"),)),
+    "QuiltBlockSort": (BLOCK_COLUMNS, (("BlockName", "asc"), ("ID", "asc"))),
 }
 SELECTION_TABLES = {
     "Fabric": ("SelectionSet", "SelectionMember", "FabricPieceID"),
     "ErrorMessage": ("ErrorMessageSet", "ErrorMessageMember", "ErrorMessageID"),
+    "QuiltBlock": ("BlockSet", "BlockSetMember", "QuiltBlockID"),
 }
 WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History"))
 
@@ -256,7 +348,7 @@ class Database:
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
                   and self.connection.execute("PRAGMA user_version").fetchone()[0] in
-                  (1, 2, 3, 4, 5)):
+                  (1, 2, 3, 4, 5, 6)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -275,10 +367,13 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, 4, 5, SCHEMA_VERSION)
+                or version not in ((1, 2, 3, 4, 5, 6, SCHEMA_VERSION)
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version < 7 and table in ("QuiltBlock", "BlockPart", "BlockPartPlacement", "BlockSet",
+                                         "BlockSetMember", "Quilt", "QuiltBlockUse", "QuiltColorMap", "QuiltPlan"):
+                continue
             if version < 5 and table in ("WorkingListSet", "WorkingListMember"):
                 continue
             if version < 6 and table in ("QuiltBack", "QuiltBackPanel", "QuiltBackCutSource"):
@@ -311,13 +406,13 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5):
+            if version not in (1, 2, 3, 4, 5, 6):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
                       + (HELP_SCHEMA if version < 3 else "")
                       + (ERROR_SCHEMA if version < 4 else "")
                       + (WORKING_LIST_SCHEMA if version < 5 else "")
-                      + BACK_SCHEMA)
+                      + (BACK_SCHEMA if version < 6 else "") + BLOCK_SCHEMA)
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
@@ -562,6 +657,294 @@ class Database:
         if row["ResolutionText"]:
             text += f"\n\n{row['ResolutionText']}"
         return f"{text}\n\nError ID: {row['ErrorTextID']}"
+
+    def blocks(self, filters=None, selected_ids=None, sort=None):
+        clean = validate_fields(BLOCK_FILTER_FIELDS, filters or {"BlockName": "", "Status": ""})
+        order = self.load_sort("QuiltBlockSort") if sort is None else normalize_sort(sort, BLOCK_COLUMNS)
+        clauses, args = [], []
+        if clean["BlockName"]:
+            clauses.append("instr(lower(BlockName), lower(?)) > 0")
+            args.append(clean["BlockName"])
+        if clean["Status"]:
+            clauses.append("Status = ?")
+            args.append(clean["Status"])
+        sql_order = ", ".join(
+            f'"{name}" {"" if name in ("ID", "FinishedWidth", "FinishedLength", "Revision") else "COLLATE NOCASE "}{direction}'
+            if name != "Scale" else f'CAST(Scale AS REAL) {direction}' for name, direction in order)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = [dict(row) for row in self.connection.execute(f"SELECT * FROM QuiltBlock{where} ORDER BY {sql_order}", args)]
+        if selected_ids is not None:
+            ids = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in ids]
+        return rows
+
+    def get_block(self, block_id):
+        row = self.connection.execute("SELECT * FROM QuiltBlock WHERE ID = ?", (block_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "QuiltBlock")
+        return dict(row)
+
+    def block_parts(self, block_id):
+        self.get_block(block_id)
+        return [dict(row) for row in self.connection.execute(
+            "SELECT * FROM BlockPart WHERE QuiltBlockID = ? ORDER BY ID", (block_id,))]
+
+    def block_placements(self, block_id):
+        self.get_block(block_id)
+        return [dict(row) for row in self.connection.execute(
+            "SELECT p.* FROM BlockPartPlacement p JOIN BlockPart b ON b.ID = p.BlockPartID "
+            "WHERE b.QuiltBlockID = ? ORDER BY b.ID, p.Instance", (block_id,))]
+
+    def _block_draft(self, block_id, revision):
+        row = self.get_block(block_id)
+        if row["Status"] != "Draft" or row["Revision"] != revision:
+            raise FieldError("Conflict", "QuiltBlock")
+        return row
+
+    @contextmanager
+    def _block_transaction(self):
+        self.connection.execute("BEGIN IMMEDIATE")
+        with self.connection:
+            yield
+
+    def _touch_block(self, block_id):
+        self.connection.execute(
+            "UPDATE QuiltBlock SET Revision = Revision + 1, DateModified = ? WHERE ID = ?",
+            (now(), block_id))
+
+    def add_block(self, values):
+        clean = parse_block(values)
+        timestamp = now()
+        with self.connection:
+            cursor = self.connection.execute(
+                "INSERT INTO QuiltBlock (BlockName, Description, FinishedWidth, FinishedLength, "
+                "Scale, SeamAllowance, Status, DateCreated, DateModified) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'Draft', ?, ?)", (*clean.values(), timestamp, timestamp))
+        return cursor.lastrowid
+
+    def update_block(self, block_id, revision, values):
+        clean = parse_block(values)
+        with self._block_transaction():
+            self._block_draft(block_id, revision)
+            self.connection.execute(
+                "UPDATE QuiltBlock SET BlockName = ?, Description = ?, FinishedWidth = ?, "
+                "FinishedLength = ?, Scale = ?, SeamAllowance = ? WHERE ID = ?",
+                (*clean.values(), block_id))
+            self._touch_block(block_id)
+
+    def delete_block(self, block_id, revision):
+        with self._block_transaction():
+            self._block_draft(block_id, revision)
+            self.connection.execute("DELETE FROM QuiltBlock WHERE ID = ?", (block_id,))
+
+    def copy_block(self, block_id):
+        timestamp = now()
+        with self._block_transaction():
+            source = self.get_block(block_id)
+            cursor = self.connection.execute(
+                "INSERT INTO QuiltBlock (ParentID, BlockName, Description, FinishedWidth, FinishedLength, "
+                "Scale, SeamAllowance, Status, DateCreated, DateModified) VALUES (?, ?, ?, ?, ?, ?, ?, "
+                "'Draft', ?, ?)",
+                (block_id, *(source[name] for name in (
+                    "BlockName", "Description", "FinishedWidth", "FinishedLength", "Scale", "SeamAllowance")),
+                 timestamp, timestamp))
+            new_id = cursor.lastrowid
+            for part in self.block_parts(block_id):
+                result = self.connection.execute(
+                    "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (new_id, *(part[name] for name in (
+                        "PartName", "Shape", "PartColor", "NumberInBlock", "PartWidth", "PartLength",
+                        "SideA", "SideB", "SideC", "Diameter"))))
+                self.connection.execute(
+                    "INSERT INTO BlockPartPlacement (BlockPartID, Instance, X, Y, Rotation, Mirrored) "
+                    "SELECT ?, Instance, X, Y, Rotation, Mirrored FROM BlockPartPlacement WHERE BlockPartID = ?",
+                    (result.lastrowid, part["ID"]))
+        return new_id
+
+    def save_block_part(self, block_id, revision, values, part_id=None):
+        clean = parse_part(values)
+        with self._block_transaction():
+            self._block_draft(block_id, revision)
+            if part_id is None:
+                cursor = self.connection.execute(
+                    "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (block_id, *clean.values()))
+                part_id = cursor.lastrowid
+            else:
+                cursor = self.connection.execute(
+                    "UPDATE BlockPart SET PartName=?, Shape=?, PartColor=?, NumberInBlock=?, "
+                    "PartWidth=?, PartLength=?, SideA=?, SideB=?, SideC=?, Diameter=? "
+                    "WHERE ID=? AND QuiltBlockID=?", (*clean.values(), part_id, block_id))
+                if cursor.rowcount != 1:
+                    raise FieldError("MissingRecord", "BlockPart")
+            self.connection.execute(
+                "DELETE FROM BlockPartPlacement WHERE BlockPartID=? AND Instance>?",
+                (part_id, clean["NumberInBlock"]))
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO BlockPartPlacement "
+                "(BlockPartID, Instance, X, Y, Rotation, Mirrored) VALUES (?, ?, 0, 0, 0, 0)",
+                ((part_id, number) for number in range(1, clean["NumberInBlock"] + 1)))
+            self._touch_block(block_id)
+        return part_id
+
+    def delete_block_part(self, block_id, revision, part_id):
+        with self._block_transaction():
+            self._block_draft(block_id, revision)
+            cursor = self.connection.execute(
+                "DELETE FROM BlockPart WHERE ID=? AND QuiltBlockID=?", (part_id, block_id))
+            if cursor.rowcount != 1:
+                raise FieldError("MissingRecord", "BlockPart")
+            self._touch_block(block_id)
+
+    def save_block_placement(self, block_id, revision, placement_id, x, y, rotation, mirrored):
+        if (type(x) is not int or type(y) is not int or x < 0 or y < 0
+                or type(rotation) is not int or not 0 <= rotation < 360 or type(mirrored) is not bool):
+            raise FieldError("Choice", "BlockPartPlacement")
+        with self._block_transaction():
+            self._block_draft(block_id, revision)
+            cursor = self.connection.execute(
+                "UPDATE BlockPartPlacement SET X=?, Y=?, Rotation=?, Mirrored=? WHERE ID=? AND "
+                "BlockPartID IN (SELECT ID FROM BlockPart WHERE QuiltBlockID=?)",
+                (x, y, rotation, int(mirrored), placement_id, block_id))
+            if cursor.rowcount != 1:
+                raise FieldError("MissingRecord", "BlockPartPlacement")
+            self._touch_block(block_id)
+
+    def approve_block(self, block_id, revision):
+        with self._block_transaction():
+            block = self._block_draft(block_id, revision)
+            issues = validate_layout(block, self.block_parts(block_id), self.block_placements(block_id))
+            if issues:
+                raise FieldError("Database", "QuiltBlock", detail=" ".join(issues))
+            self.connection.execute("UPDATE QuiltBlock SET Status='Approved' WHERE ID=?", (block_id,))
+            self._touch_block(block_id)
+
+    def quilts(self):
+        return [dict(row) for row in self.connection.execute(
+            "SELECT * FROM Quilt ORDER BY QuiltName COLLATE NOCASE, ID")]
+
+    def get_quilt(self, quilt_id):
+        row = self.connection.execute("SELECT * FROM Quilt WHERE ID=?", (quilt_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "Quilt")
+        return dict(row)
+
+    def add_quilt(self, name):
+        clean = validate_fields((Field("QuiltName", required=True),), {"QuiltName": name})["QuiltName"]
+        timestamp = now()
+        with self.connection:
+            return self.connection.execute(
+                "INSERT INTO Quilt (QuiltName, DateCreated, DateModified) VALUES (?, ?, ?)",
+                (clean, timestamp, timestamp)).lastrowid
+
+    def _quilt_revision(self, quilt_id, revision):
+        row = self.get_quilt(quilt_id)
+        if row["Revision"] != revision:
+            raise FieldError("Conflict", "Quilt")
+
+    def _touch_quilt(self, quilt_id):
+        self.connection.execute("UPDATE Quilt SET Revision=Revision+1, DateModified=? WHERE ID=?",
+                                (now(), quilt_id))
+
+    def quilt_uses(self, quilt_id):
+        self.get_quilt(quilt_id)
+        return [dict(row) for row in self.connection.execute(
+            "SELECT b.ID, b.BlockName, b.Scale, u.Quantity FROM QuiltBlockUse u "
+            "JOIN QuiltBlock b ON b.ID=u.QuiltBlockID WHERE u.QuiltID=? ORDER BY b.BlockName, b.ID", (quilt_id,))]
+
+    def set_quilt_use(self, quilt_id, revision, block_id, quantity):
+        if type(quantity) is not int or not 1 <= quantity <= 10000:
+            raise FieldError("Choice", "Quantity")
+        with self._block_transaction():
+            self._quilt_revision(quilt_id, revision)
+            if self.get_block(block_id)["Status"] != "Approved":
+                raise FieldError("Choice", "QuiltBlock")
+            self.connection.execute(
+                "INSERT INTO QuiltBlockUse (QuiltID, QuiltBlockID, Quantity) VALUES (?, ?, ?) "
+                "ON CONFLICT(QuiltID, QuiltBlockID) DO UPDATE SET Quantity=excluded.Quantity",
+                (quilt_id, block_id, quantity))
+            self._touch_quilt(quilt_id)
+
+    def remove_quilt_use(self, quilt_id, revision, block_id):
+        with self._block_transaction():
+            self._quilt_revision(quilt_id, revision)
+            cursor = self.connection.execute(
+                "DELETE FROM QuiltBlockUse WHERE QuiltID=? AND QuiltBlockID=?", (quilt_id, block_id))
+            if cursor.rowcount != 1:
+                raise FieldError("MissingRecord", "QuiltBlock")
+            self._touch_quilt(quilt_id)
+
+    def quilt_mappings(self, quilt_id):
+        self.get_quilt(quilt_id)
+        return [dict(row) for row in self.connection.execute(
+            "SELECT PartColor, InventoryColor FROM QuiltColorMap WHERE QuiltID=? "
+            "ORDER BY PartColor, InventoryColor COLLATE NOCASE", (quilt_id,))]
+
+    def add_quilt_mapping(self, quilt_id, revision, part_color, inventory_color):
+        from .blocks import COLORS
+        if part_color not in COLORS:
+            raise FieldError("Choice", "PartColor")
+        valid = {row["ListItem"] for row in self.dropdown_rows("Color")}
+        if inventory_color not in valid or not inventory_color:
+            raise FieldError("Choice", "InventoryColor")
+        with self._block_transaction():
+            self._quilt_revision(quilt_id, revision)
+            self.connection.execute(
+                "INSERT OR IGNORE INTO QuiltColorMap (QuiltID, PartColor, InventoryColor) VALUES (?, ?, ?)",
+                (quilt_id, part_color, inventory_color))
+            self._touch_quilt(quilt_id)
+
+    def remove_quilt_mapping(self, quilt_id, revision, part_color, inventory_color):
+        with self._block_transaction():
+            self._quilt_revision(quilt_id, revision)
+            cursor = self.connection.execute(
+                "DELETE FROM QuiltColorMap WHERE QuiltID=? AND PartColor=? AND InventoryColor=?",
+                (quilt_id, part_color, inventory_color))
+            if cursor.rowcount != 1:
+                raise FieldError("MissingRecord", "QuiltColorMap")
+            self._touch_quilt(quilt_id)
+
+    def quilt_plans(self, quilt_id):
+        self.get_quilt(quilt_id)
+        return [dict(row) for row in self.connection.execute(
+            "SELECT ID, QuiltID, QuiltRevision, DateCreated FROM QuiltPlan WHERE QuiltID=? ORDER BY ID DESC",
+            (quilt_id,))]
+
+    def get_quilt_plan(self, plan_id):
+        row = self.connection.execute("SELECT * FROM QuiltPlan WHERE ID=?", (plan_id,)).fetchone()
+        if row is None:
+            raise FieldError("MissingRecord", "QuiltPlan")
+        result = dict(row)
+        try:
+            result["PlanData"] = json.loads(result["PlanData"])
+        except (ValueError, TypeError) as error:
+            raise FieldError("DatabaseFormat", "QuiltPlan", detail=str(error)) from error
+        return result
+
+    def create_quilt_plan(self, quilt_id, revision):
+        with self._block_transaction():
+            self._quilt_revision(quilt_id, revision)
+            records = self.quilt_uses(quilt_id)
+            if not records:
+                raise FieldError("Required", "QuiltBlock")
+            uses = []
+            for record in records:
+                block = self.get_block(record["ID"])
+                if block["Status"] != "Approved":
+                    raise FieldError("Choice", "QuiltBlock")
+                uses.append({"block": block, "parts": self.block_parts(block["ID"]),
+                             "placements": self.block_placements(block["ID"]),
+                             "quantity": record["Quantity"]})
+            mappings = {}
+            for row in self.quilt_mappings(quilt_id):
+                mappings.setdefault(row["PartColor"], []).append(row["InventoryColor"])
+            draft = plan_quilt(uses, mappings, self.pieces())
+            draft.update(quilt=self.get_quilt(quilt_id), uses=uses, mappings=mappings)
+            return self.connection.execute(
+                "INSERT INTO QuiltPlan (QuiltID, QuiltRevision, PlanData, DateCreated) VALUES (?, ?, ?, ?)",
+                (quilt_id, revision, json.dumps(draft), now())).lastrowid
 
     def get_piece(self, piece_id):
         row = self.connection.execute("SELECT * FROM FabricPiece WHERE ID = ?", (piece_id,)).fetchone()
@@ -946,7 +1329,7 @@ class Database:
                     f"SELECT 1 FROM {table} WHERE SetName = ? COLLATE NOCASE", (name,)).fetchone():
                 raise FieldError("DuplicateSet", "SetName")
             for record_id in ids:
-                (self.get_piece if screen == "Fabric" else self.get_error)(record_id)
+                {"Fabric": self.get_piece, "ErrorMessage": self.get_error, "QuiltBlock": self.get_block}[screen](record_id)
             cursor = self.connection.execute(
                 f"INSERT INTO {table} (SetName, DateCreated) VALUES (?, ?)", (name, now()),
             )

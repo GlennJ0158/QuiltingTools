@@ -1,7 +1,7 @@
 # Quilting Tools
 
 Python + SQLite desktop tools for quilting, using Tkinter and the Python standard
-library. The screen conventions follow the `GlennJ0158/PrintFilaments` inventory
+library plus Shapely for block geometry. The screen conventions follow the `GlennJ0158/PrintFilaments` inventory
 application: blue entry area, list/detail maintenance, named selection sets,
 multi-column sorting, and F1 field help.
 
@@ -10,15 +10,18 @@ multi-column sorting, and F1 field help.
 Run with Python 3.10 or later:
 
 ```sh
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 python QuiltingTools.py
 python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 ```
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 5 prompt for a backed-up
+automatically. Databases with schema versions 1 through 6 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
-working-list selection snapshots and Quilt Backs planning; declining leaves the
+working-list selection snapshots, Quilt Backs planning and QuiltBlock design; declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
@@ -29,7 +32,7 @@ Tkinter must be available in the Python installation.
 ### Navigation and help
 
 Every application screen and workflow window has the same top-right navigation:
-**Fabric / DropDown / HelpText / ErrorMessage / Setup / Screen Help**.
+**Fabric / Quilt Backs / QuiltBlock / Quilt / DropDown / HelpText / ErrorMessage / Setup / Screen Help**.
 Switching screens closes unfinished dialogs, releases their modal grabs, and
 resets unsaved entry forms before showing the destination. Unsaved input requires
 confirmation; declining keeps the current screen, input and dialog intact.
@@ -176,6 +179,66 @@ operator can generate a new draft using the reconciled inventory. **Mark Assembl
 it does not alter inventory. Multiple drafts do not reserve fabric, so only the
 first plan using a source can be confirmed without regeneration.
 
+### Quilt blocks
+
+Open **QuiltBlock** to add a named draft with finished width and length, scale
+percentage (100 by default), and seam allowance (1/4 inch per edge by default).
+Scale applies to the finished design and placement coordinates, not seam allowance.
+Add part definitions through **Parts**: rectangle, square, right triangle,
+isosceles triangle, circle or semicircle. Enter finished measurements and a
+count per block. Squares require equal sides. For triangles, side `a` is the
+horizontal base and `b` and `c` connect its left and right ends to the third
+vertex. Right triangles must satisfy the Pythagorean relationship within a
+relative tolerance of 0.000001; isosceles triangles require equal entered sides.
+Circles and semicircles use a diameter; the semicircle occupies the upper half
+of its diameter's circle. Choose a controlled sketch color.
+
+**Sketch** shows every part instance using finished dimensions; choose an instance
+and save its unscaled position from the top left of the block, rotation in whole
+degrees, and optional mirror. Its reported cut bounding dimensions come from an
+outward seam offset, not independently enlarged triangle sides. Curves and
+offsets are approximated as polygons (64 segments per quarter-circle); printed
+outlines are visual guides, not cutting templates. Print Sketch saves an HTML
+report at a new filename and opens the browser print dialog.
+
+**Approve** checks all instances, overlaps, gaps and overflow against the block
+rectangle before making the version immutable. The geometry check allows an area
+tolerance of one billionth of an inch times the block perimeter (at least
+0.0000000001 square inches) for numeric rounding; curves are approximations.
+**New Version** copies a block and all placements into a separate draft, preserving
+the original. Block selections and sort order are independent of Fabric. Deleting
+a draft removes its parts and set memberships; approved versions are not deleted.
+
+Block design never reserves or changes fabric inventory.
+
+### Quilt composition and cutting plans
+
+Open **Quilt** to create or select a project. Choose an approved block version and
+use **Set Block Quantity** for the required count. A version may belong to several
+quilts concurrently; later draft copies never alter their selected versions.
+Block scale applies uniformly to the finished design; seam allowance remains the
+entered physical allowance. Changes of scale require a new version once approved.
+
+Use **Map Color** to associate each part's sketch color with one or more existing
+inventory Color values. No inferred color substitutions are made. **Plan Quilt**
+aggregates all selected blocks' parts and packs their cut-outline bounding
+rectangles into Available fabric. It prefers an already used source with space,
+then a fitting leftover region and smaller source area. Parts can rotate 90 degrees;
+the plan records source orientation, assembly rotation, mirrored instances, grain
+and print descriptions for operator review. Many parts can share one source.
+
+Packing is a deterministic heuristic, not a proof of minimum fabric consumption.
+It does not interlock triangles or curves; each outline gets its own rectangular
+bounding space. Plans support at most 10,000 required part instances and explicitly
+report quantities left unfilled because no mapped color or fitting source was found.
+It is possible another layout could fit where this search reports shortages.
+
+Plans retain their quilt composition, color mapping and fabric revision snapshots.
+They can be reopened and printed as an HTML cutting report with source diagrams.
+Diagrams and cutting outlines are visual guides, not actual-size templates.
+Plans are **informational only**: they neither reserve nor consume fabric. Save
+quantity/mapping changes before planning, and regenerate after inventory changes.
+
 ### Standardized dropdowns
 
 Fabric Name, Color, Pattern Name and Storage Location use database-backed,
@@ -290,19 +353,18 @@ The integrated roadmap remains:
 2. **Quilt Backs**: the first-release rectangular strip planner and operator-confirmed
    inventory adjustment are implemented. Automatic general-purpose waste optimization
    and reservation workflows remain future work.
-3. **Blocks & Quilts**: versioned reusable block definitions, construction methods,
-   named quilt patterns and actual quilt projects. Begin with Nine Patch and
-   one Flying Geese method. Produce block, batch and whole-quilt cutting lists,
-   per-block assembly lists and block-type counts.
+3. **Blocks & Quilts**: versioned block/part definitions, validated sketches,
+   quilt quantities, explicit color mapping and informational cutting plans are
+   implemented. Construction methods and automatic assembly remain future work.
 
-Reservations, general geometry editing, metric measurements and automatic waste
+Reservations, unrestricted geometry editing, metric measurements and exact waste
 optimization are **not** implemented yet. Future block/layout calculation should stay separate
 from the UI and inventory persistence. Do not copy filament-specific stock
 calculations into quilting.
 
 ## Development
 
-No third-party Python packages are needed.
+Install dependencies from `requirements.txt` into the active environment before testing.
 
 ```sh
 python -m unittest discover -v
@@ -321,3 +383,6 @@ Database tests cover validation, exact dimensions, stale updates, transaction
 rollback, history, persistence, error messages, dropdown normalization,
 backed-up upgrades/rollback, HelpText validation and preservation, error-reference
 CRUD/conflicts, literal searches, isolated selection sets, and backup/restore.
+Block/quilt tests cover immutable approval, independent draft copies, seam offsets,
+layout gaps/overlaps, rollback, multi-part source packing, saved shortages and
+non-consuming GUI/printing workflows.

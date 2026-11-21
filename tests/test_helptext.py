@@ -126,6 +126,9 @@ class HelpTextTests(unittest.TestCase):
         })
         self.db.save_set("Existing errors", [message_id], "ErrorMessage")
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE WorkingListMember")
@@ -146,6 +149,9 @@ class HelpTextTests(unittest.TestCase):
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("WorkingListMember", "WorkingListSet",

@@ -6,7 +6,7 @@ from pathlib import Path
 from quilting.backs import (
     INCH, PALETTE, generate_layouts, layout_svg, palette_suggestion, ratio_label,
 )
-from quilting.database import Database, UpgradeRequired
+from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
 from tests.test_inventory import fabric
 
@@ -174,6 +174,9 @@ class QuiltBackPlanningTests(unittest.TestCase):
     def test_version_five_upgrade_adds_back_tables_and_keeps_a_verified_backup(self):
         self.add_piece(FabricName="Legacy")
         with self.db.connection:
+            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("PRAGMA user_version = 5")
@@ -181,7 +184,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
         with self.assertRaises(UpgradeRequired):
             Database(self.path)
         self.db = Database(self.path, upgrade=True)
-        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], 6)
+        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         self.assertEqual(self.db.pieces()[0]["FabricName"], "Legacy")
         with sqlite3.connect(self.db.upgrade_backup) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 5)
