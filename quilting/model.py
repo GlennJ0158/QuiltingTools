@@ -61,7 +61,8 @@ FILTER_FIELDS = (
 )
 FABRIC_NAMES = tuple(field.name for field in FABRIC_FIELDS)
 DROPDOWN_FIELDS = {field.name: field for field in FABRIC_FIELDS if field.kind in ("dropdown", "choice")}
-NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "Revision", "RecordCount", "Def", "Use"))
+NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "BackWidth", "BackLength",
+                             "Revision", "RecordCount", "Def", "Use"))
 LIST_COLUMNS = (
     "ID", "FabricName", "Color", "PatternName", "UsableWidth", "UsableLength",
     "GrainDirection", "PrintDirection", "StorageLocation", "Status",

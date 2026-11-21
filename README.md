@@ -16,11 +16,11 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases from versions 0.1 through 0.4 prompt for a backed-up upgrade
-to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1), working-list
-selection snapshots and generalized table/screen dropdown keys; declining leaves
-the database unchanged. Close all other copies
-of the application before accepting. A verified `PreUpgrade_*` database is kept
+automatically. Databases with schema versions 1 through 7 prompt for a backed-up
+upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
+working-list selections, Quilt Backs planning and generalized dropdown keys; declining
+leaves the database unchanged. Close all other copies of the application before accepting.
+A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
 upgrades roll back. Unknown or incompatible databases are rejected.
@@ -76,11 +76,12 @@ not literal complete error messages. System/SQLite exception details are represe
 by their enclosing template; arbitrary OS-specific strings are not enumerated.
 Startup messages may not have runtime Error IDs.
 
-The toolbar is **Select Highlighted / Filter / Set / Sort**, followed by Reset
-Selection, Refresh and Print. Filter searches Error Text, Likely Cause and
+The entry fields each show one line while retaining multiline text. The toolbar is
+**Select Highlighted / Filter / Set Selection / Reset Selection / Sort**, followed by
+Refresh and Print. Filter searches Error Text, Likely Cause and
 Description using literal text-contains matching, ignoring ASCII case. Multiple
 nonblank criteria are ANDed, including any existing highlighted-row restriction.
-Set saves all listed IDs as a named snapshot, not just highlights. Applying a set
+Set Selection saves all listed IDs as a named snapshot, not just highlights. Applying a set
 clears other restrictions. Message sets and saved multi-column sorts are separate
 from Fabric's. ID sorts numerically and is added to break sort ties. Deleting a
 message also removes its saved-set memberships; deleting a set keeps its messages.
@@ -142,6 +143,40 @@ Metric entry/conversion is not yet implemented.
   is not a cutting transaction. Dimensions can be corrected manually, with the
   reason recorded in Notes.
 
+### Quilt backs
+
+Open **Quilt Backs** to enter a name, quilt width/length, one equal overhang margin
+for all four sides, and one seam allowance used at every seam. Select available
+fabric rectangles, optionally choose a controlled **Sketch Color** for each source,
+and choose **Generate Plans**. Color suggestions are derived from inventory text,
+but can be overridden for the plan. No swatch data is added to inventory. The
+assembly sketch shades every finished panel with its palette color, marks known
+grain with arrows, identifies unknown grain, and includes a legend with the
+inventory fabric name and recorded color description.
+
+The first planner release generates one-piece or equal-width vertical-strip or
+equal-length horizontal-strip layouts, up to 20 panels. It only uses the selected
+available rectangles, never silently rotates them, and checks a nonoverlapping
+shelf-cut placement within each source piece. A single rectangle can supply multiple
+panels. The planner ranks feasible plans by panel-size tier (20% of quilt size
+preferred, then 10%; every panel is at least 5 inches), known consistent grain,
+fewer panels, and smaller total source area. It only shows alternatives from the
+best feasible panel-size tier. The alternatives are compromises, not an automatic
+promise of minimum waste. This release does not search arbitrary unequal panels,
+T-joints, general two-dimensional nesting or layouts above 20 panels.
+
+Preview the assembly sketch, then **Save Draft** and **Print Plan** as needed.
+Drafts retain source IDs/revisions and do not reserve or modify inventory. At
+**Confirm Cuts**, the operator reports the measured reusable remainder for each
+source, or leaves both dimensions blank if it was consumed. These entries are
+authoritative: the app does not infer actual cuts or limit a measured remainder
+to the plan's estimated waste. It retires each source, adds entered remnants as
+new inventory rectangles, and records the back, source snapshots and inventory
+history in one transaction. A changed/retired source blocks confirmation so the
+operator can generate a new draft using the reconciled inventory. **Mark Assembled** records sewing completion;
+it does not alter inventory. Multiple drafts do not reserve fabric, so only the
+first plan using a source can be confirmed without regeneration.
+
 ### Standardized dropdowns
 
 Fabric Name, Color, Pattern Name and Storage Location use database-backed,
@@ -167,8 +202,8 @@ statuses cannot be added.
 
 ### Working lists
 
-The shared toolbar order is **Select Highlighted, Filter, Set Selection, Sort**,
-followed by Reset Selection and Refresh.
+The shared toolbar order is **Select Highlighted, Filter, Set Selection,
+Reset Selection, Sort**, followed by screen-specific actions such as Refresh.
 
 **Select Highlighted** restricts the current working list to its highlighted
 rows. It requires at least one highlight and does not change inventory.
@@ -195,12 +230,14 @@ are right-aligned; all other values and headings are left-aligned. Internal
 descriptive names such as `UsableWidth` appear as `Usable Width` in labels.
 Press F1 in an editable field for help.
 
-The **DropDown** choices, **HelpText** catalog and read-only **History** list use
+The **DropDown** choices, **HelpText** catalog, **Quilt Backs** saved plans and read-only **History** list use
 the same selection, filtering, named-set and multi-column sort workflow. Dropdown
 sets are scoped to the currently selected Table Name and Field Name; History sets
 are scoped to the currently selected piece. Dropdown filters search List Item or select
 default/non-default rows. HelpText filters search each text/key column. History
-filters match action, timestamp or saved Before/After values. Each list's sort is
+filters match action, timestamp or saved Before/After values. Quilt Backs filters
+match back name and status; its controls do not affect source or candidate lists.
+Each list's sort is
 saved independently; HelpText no longer relies on heading-click sorting. Applying
 a saved set clears that list's other restrictions, and Reset Selection restores
 all rows in the current scope.
@@ -257,18 +294,16 @@ SQLite; the source code defines supported validation rules and schema.
 The integrated roadmap remains:
 
 1. **Fabric Inventory and shared utilities**: implemented in this milestone.
-2. **Quilt Backs**: selected rectangles, target backing dimensions and margins,
-   seam allowances, rectangular panel layouts and printable cut/assembly plans.
-   Drafts will not consume fabric. Confirmed cuts will recheck availability and
-   transactionally record consumption and measured reusable remnants.
+2. **Quilt Backs**: the first-release rectangular strip planner and operator-confirmed
+   inventory adjustment are implemented. Automatic general-purpose waste optimization
+   and reservation workflows remain future work.
 3. **Blocks & Quilts**: versioned reusable block definitions, construction methods,
    named quilt patterns and actual quilt projects. Begin with Nine Patch and
    one Flying Geese method. Produce block, batch and whole-quilt cutting lists,
    per-block assembly lists and block-type counts.
 
-Cutting plans, remnant transactions, reservations, inventory/cutting print reports, general
-geometry editing, metric measurements and automatic waste optimization are
-**not** implemented yet. Future block/layout calculation should stay separate
+Reservations, general geometry editing, metric measurements and automatic waste
+optimization are **not** implemented yet. Future block/layout calculation should stay separate
 from the UI and inventory persistence. Do not copy filament-specific stock
 calculations into quilting.
 

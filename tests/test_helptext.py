@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from quilting.backs import INCH, generate_layouts
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.helptext import HELP_FIELDS, default_help
 from quilting.model import FieldError
@@ -126,6 +127,8 @@ class HelpTextTests(unittest.TestCase):
         })
         self.db.save_set("Existing errors", [message_id], "ErrorMessage")
         with self.db.connection:
+            for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE WorkingListMember")
             self.db.connection.execute("DROP TABLE WorkingListSet")
             self.db.connection.execute("PRAGMA user_version = 4")
@@ -168,6 +171,8 @@ class HelpTextTests(unittest.TestCase):
                 "WHERE Def = 1 AND Use = 1")
             self.db.connection.execute(
                 "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (set_id,))
+            for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         self.db = Database(self.path, upgrade=True)
@@ -188,9 +193,56 @@ class HelpTextTests(unittest.TestCase):
             "Update", table_name="HelpText")}
         self.assertEqual(rows, {"Apply help changes": 0, "Save help changes": 1})
 
+    def test_version_seven_upgrade_preserves_back_and_dropdown_sets(self):
+        source_id = self.db.save_piece(fabric(UsableWidth="100", UsableLength="100"))
+        layout = generate_layouts([self.db.get_piece(source_id)], 30 * INCH, 30 * INCH, 0, INCH)[0]
+        back_id = self.db.save_back_draft("Legacy back", 30 * INCH, 30 * INCH, 0, INCH, layout)
+        back_set = self.db.save_set("Backs", [back_id], "Quilt Backs")
+        self.db.add_dropdown_item("Color", "Blue")
+        color_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
+        color_set = self.db.save_set("Colors", [color_id], "DropDown", "Color")
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (color_set,))
+            self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
+            self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
+            self.db.connection.execute("""
+                CREATE TABLE Dropdown (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    TableName TEXT NOT NULL CHECK(TableName = 'FabricPiece'),
+                    FieldName TEXT NOT NULL,
+                    ListItem TEXT NOT NULL COLLATE NOCASE CHECK(length(ListItem) <= 120),
+                    Def INTEGER NOT NULL DEFAULT 0 CHECK(Def IN (0, 1)),
+                    Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
+                    UNIQUE(TableName, FieldName, ListItem)
+                )
+            """)
+            self.db.connection.execute("INSERT INTO Dropdown SELECT * FROM DropdownCurrent")
+            self.db.connection.execute("DROP TABLE DropdownCurrent")
+            self.db.connection.execute(
+                "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
+                "WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute("PRAGMA user_version = 7")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.set_members(color_set, "DropDown", ("FabricPiece", "Color")), [color_id])
+        self.assertEqual(self.db.set_members(back_set, "Quilt Backs"), [back_id])
+        self.assertEqual(self.db.get_quilt_back(back_id)["BackName"], "Legacy back")
+        self.assertEqual(self.db.connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(
+                backup.execute("SELECT ScopeName FROM WorkingListSet WHERE ID = ?", (color_set,)).fetchone()[0],
+                "Color",
+            )
+
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
+            for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("WorkingListMember", "WorkingListSet",
                           "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")

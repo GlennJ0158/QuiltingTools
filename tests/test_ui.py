@@ -235,6 +235,84 @@ class ScreenTests(unittest.TestCase):
         self.app.open_filter()
         verify(next(child for child in self.dialog().winfo_children() if isinstance(child, Form)))
 
+    def test_requested_screens_have_blue_entry_panels_below_intro_and_actions(self):
+        style = ttk.Style(self.root)
+        self.assertEqual(style.lookup("Entry.TFrame", "background"), "#c3dafd")
+        for screen, page, form_name, action_name in (
+            ("DropDown", self.app.dropdown_page, "dropdown_form", "Add Item"),
+            ("HelpText", self.app.help_page, "help_form", "Update"),
+            ("Quilt Backs", self.app.backs_page, "back_form", "Set Sketch Color"),
+        ):
+            self.app.show_screen(screen)
+            form = getattr(self.app, form_name)
+            self.assertEqual(form.master.cget("style"), "Entry.TFrame", screen)
+            self.assertTrue(all(
+                label.cget("style") == "Entry.TLabel"
+                for label in form.winfo_children() if isinstance(label, ttk.Label)
+            ), screen)
+            action = next(
+                widget for widget in descendants(page)
+                if isinstance(widget, ttk.Button) and widget.cget("text") == action_name
+            )
+            self.assertEqual(action.master.cget("style"), "Entry.TFrame", screen)
+            self.assertNotEqual(form.master, page, screen)
+
+    def test_quilt_back_saved_plans_have_isolated_ordered_working_list_tools(self):
+        source_id = self.add_piece(
+            FabricName="Backing", UsableWidth="100", UsableLength="100",
+        )
+        self.app.show_screen("Quilt Backs")
+        self.app.back_form.assign({
+            "BackName": "Back A", "QuiltWidth": "30", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.back_stock.tree.selection_set(str(source_id))
+        self.app.generate_back_plans()
+        layout = self.app.back_selected_layout
+        self.db.save_back_draft("Back A", 30_000_000, 30_000_000, 0, 1_000_000, layout)
+        self.db.save_back_draft("Back B", 30_000_000, 30_000_000, 0, 1_000_000, layout)
+        self.app.refresh_backs()
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(source_id),))
+        candidate_ids = self.app.back_candidates.tree.get_children()
+        self.assertTrue(candidate_ids)
+
+        labels = [widget.cget("text") for widget in descendants(self.app.backs_page)
+                  if isinstance(widget, ttk.Button)]
+        start = labels.index("Select Highlighted")
+        self.assertEqual(labels[start:start + 5], [
+            "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
+        ])
+        self.click(self.app.backs_page, "Filter")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["BackName"].set("back b")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(
+            [self.app.back_list.tree.item(item, "values")[1]
+             for item in self.app.back_list.tree.get_children()],
+            ["Back B"],
+        )
+        self.click(self.app.backs_page, "Reset Selection")
+        back_b = next(row["ID"] for row in self.db.quilt_backs() if row["BackName"] == "Back B")
+        self.app.back_list.tree.selection_set(str(back_b))
+        self.click(self.app.backs_page, "Select Highlighted")
+        self.assertEqual(self.app.back_list.tree.get_children(), (str(back_b),))
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(source_id),))
+        self.assertEqual(self.app.back_candidates.tree.get_children(), candidate_ids)
+        self.click(self.app.backs_page, "Reset Selection")
+        self.click(self.app.backs_page, "Sort")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.defaults()
+        form.variables["SortField1"].set("Back Name")
+        form.variables["Direction1"].set("desc")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.db.load_sort("QuiltBackSort"), (("BackName", "desc"), ("ID", "asc")))
+        self.click(self.app.backs_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("Two backs")
+        self.click(self.app.dialogs[-1], "Save Current")
+        self.assertEqual(len(self.db.sets("Quilt Backs")), 1)
+        self.errors.assert_not_called()
+
     def test_add_from_highlighted_piece_creates_new_identity_update_changes_only_new_piece(self):
         first = self.add_piece(Color="Sage", StorageLocation="Bolt 1")
         original = self.db.get_piece(first)
@@ -540,7 +618,8 @@ class ScreenTests(unittest.TestCase):
         buttons = [widget.cget("text") for widget in descendants(self.app.error_page)
                    if isinstance(widget, ttk.Button)]
         start = buttons.index("Select Highlighted")
-        self.assertEqual(buttons[start:start + 4], ["Select Highlighted", "Filter", "Set", "Sort"])
+        self.assertEqual(buttons[start:start + 5], [
+            "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort"])
         self.click(self.app.error_page, "Filter")
         window = self.app.dialogs[-1]
         self.assertTrue(all(self.db.help_pair("Error Filter", "ScreenHelp")))
@@ -558,7 +637,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.error_list.tree.get_children(), (str(second), str(first)))
         self.assertEqual(self.db.load_sort("ErrorMessageSort"), (("Description", "desc"), ("ID", "asc")))
         self.assertEqual(self.db.load_sort(), self.app.sort)
-        self.click(self.app.error_page, "Set")
+        self.click(self.app.error_page, "Set Selection")
         window = self.app.dialogs[-1]
         self.assertTrue(all(self.db.help_pair("Error Set", "ScreenHelp")))
         form = self.app.dialog_forms[window][0]
@@ -569,7 +648,7 @@ class ScreenTests(unittest.TestCase):
         self.click(self.app.error_page, "Select Highlighted")
         self.assertEqual(self.app.error_list.tree.get_children(), (str(second),))
         self.click(self.app.error_page, "Reset Selection")
-        self.click(self.app.error_page, "Set")
+        self.click(self.app.error_page, "Set Selection")
         window = self.app.dialogs[-1]
         form = self.app.dialog_forms[window][0]
         form.variables["SavedSet"].set(form.widgets["SavedSet"].cget("values")[1])
@@ -674,7 +753,7 @@ class ScreenTests(unittest.TestCase):
                   if isinstance(widget, ttk.Button)]
         start = labels.index("Select Highlighted")
         self.assertEqual(labels[start:start + 5], [
-            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+            "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
         ])
         self.app.dropdown_form.variables["FieldName"].set("Color")
         self.db.add_dropdown_item("Color", "Blue")
@@ -712,13 +791,66 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
         self.errors.assert_not_called()
 
+    def test_quilt_back_plan_preview_cut_confirmation_and_inventory_adjustment(self):
+        source_ids = [
+            self.db.save_piece(fabric(
+                FabricName=f"Red backing {index}", Color="Red", UsableWidth="42",
+                UsableLength="60", GrainDirection="Along Width",
+            ))
+            for index in range(2)
+        ]
+        self.app.show_screen("Quilt Backs")
+        self.app.back_form.assign({
+            "BackName": "Guest back",
+            "QuiltWidth": "50",
+            "QuiltLength": "50",
+            "Margin": "0",
+            "SeamAllowance": "1",
+        })
+        self.app.back_stock.tree.selection_set(tuple(map(str, source_ids)))
+        self.app.back_palette[source_ids[0]] = "Teal"
+        self.app.generate_back_plans()
+        self.assertTrue(self.app.back_layouts)
+        self.assertEqual(self.app.back_selected_layout.panels[0].palette_color, "Teal")
+        self.app.preview_back()
+        preview = self.dialog()
+        self.assertTrue(any(isinstance(widget, tk.Canvas) for widget in descendants(preview)))
+        back_id = self.app.save_back_draft()
+        back_id = int(back_id) if back_id else int(self.app.back_selected_id)
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Draft")
+        self.assertTrue(all(self.db.get_piece(piece_id)["Status"] == "Available"
+                            for piece_id in source_ids))
+        report_path = Path(self.temp.name) / "back.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(report_path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True):
+            self.app.print_back_plan()
+        report = report_path.read_text(encoding="utf-8")
+        self.assertIn("<svg", report)
+        self.assertIn("Inventory fabric", report)
+        self.assertIn("Teal", report)
+        self.app.open_back_cut()
+        dialog_window = next(iter(self.app.dialog_forms))
+        form = self.app.dialog_forms[dialog_window][0]
+        first_source, second_source = source_ids
+        form.variables[f"RemainingWidth{first_source}"].set("5")
+        form.variables[f"RemainingLength{first_source}"].set("10")
+        self.app.commit_back_cut(
+            dialog_window, form, {source_id: {} for source_id in source_ids},
+        )
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Cut")
+        self.assertTrue(all(self.db.get_piece(piece_id)["Status"] == "Retired"
+                            for piece_id in source_ids))
+        self.app.mark_back_assembled()
+        self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Assembled")
+        self.errors.assert_not_called()
+
     def test_helptext_list_controls_filter_sort_and_named_selection(self):
         self.app.show_screen("HelpText")
         labels = [widget.cget("text") for widget in descendants(self.app.help_page)
                   if isinstance(widget, ttk.Button)]
         start = labels.index("Select Highlighted")
         self.assertEqual(labels[start:start + 5], [
-            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+            "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
         ])
         self.click(self.app.help_page, "Filter")
         form = self.app.dialog_forms[self.app.dialogs[-1]][0]
@@ -756,7 +888,7 @@ class ScreenTests(unittest.TestCase):
                   if isinstance(widget, ttk.Button)]
         start = labels.index("Select Highlighted")
         self.assertEqual(labels[start:start + 5], [
-            "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+            "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
         ])
         self.click(window, "Filter")
         form = self.app.dialog_forms[self.app.dialogs[-1]][0]
@@ -806,6 +938,15 @@ class ScreenTests(unittest.TestCase):
             self.assertEqual(self.app.dropdown_list.tree.column(name, "width"), expected_width)
         for name in DROPDOWN_COLUMNS:
             self.assertFalse(self.app.dropdown_list.tree.column(name, "stretch"))
+        self.click(self.app.dropdown_page, "Set Selection")
+        form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        form.variables["SetName"].set("Help buttons")
+        self.click(self.app.dialogs[-1], "Save Current")
+        selection = self.db.sets("DropDown", ("HelpText", "Update"))
+        self.assertEqual(len(selection), 1)
+        self.assertEqual(self.db.set_members(
+            selection[0]["ID"], "DropDown", ("HelpText", "Update")), [row["ID"]])
+        self.assertEqual(self.db.sets("DropDown", ("FabricPiece", "Color")), [])
         self.errors.assert_not_called()
 
     def test_error_message_entry_is_one_row_and_preserves_multiline_text(self):

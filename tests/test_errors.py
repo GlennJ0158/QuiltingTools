@@ -147,6 +147,8 @@ class ErrorMessageTests(unittest.TestCase):
         self.db.save_set("Keep", [piece_id])
         self.db.save_sort((("UsableWidth", "desc"),))
         with self.db.connection:
+            for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
+                self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("WorkingListMember", "WorkingListSet",
                           "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
