@@ -8,12 +8,12 @@ import webbrowser
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from . import VERSION
 from .database import (
-    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_FILTER_FIELDS, HISTORY_FILTER_FIELDS,
-    HISTORY_COLUMNS, Database,
+    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
+    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database,
 )
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import HELP_COLUMNS, HELP_FIELDS, NAVIGATION
@@ -66,7 +66,8 @@ def display_timestamp(value):
 class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
-    def __init__(self, parent, fields, columns=2, style="TFrame", database=None):
+    def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
+                 memo_height=None, memo_width=None):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
@@ -82,8 +83,11 @@ class Form(ttk.Frame):
             owner.attach_help(label, field.name)
             variable = tk.StringVar(master=self, value=field.default)
             if field.kind == "memo":
-                widget = tk.Text(self, width=field.width, height=3 if field.name == "HoverText" else 6,
-                                 wrap="word", undo=True)
+                widget = tk.Text(
+                    self, width=memo_width or field.width,
+                    height=memo_height or (3 if field.name == "HoverText" else 6),
+                    wrap="word", undo=True,
+                )
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
             elif field.kind in ("choice", "dropdown"):
@@ -652,7 +656,7 @@ class Application:
         if state is not None:
             return state
         if screen == "DropDown":
-            return self.dropdown_states[self.dropdown_field()]
+            return self.dropdown_states[self.dropdown_key()]
         if screen == "HelpText":
             return self.help_state
         raise FieldError("Choice", "Screen")
@@ -705,54 +709,97 @@ class Application:
     def build_dropdowns(self):
         window = self.dropdown_page
         ttk.Label(window, text="DropDown", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.dropdown_names = {caption(name): name for name in DROPDOWN_FIELDS}
+        self.dropdown_owner_fields = DROPDOWN_SCOPE_FIELDS
+        all_fields = tuple(dict.fromkeys(
+            name for names in self.dropdown_owner_fields.values() for name in names
+        ))
         fields = (
-            Field("FieldName", "choice", choices=tuple(self.dropdown_names),
-                  default=next(iter(self.dropdown_names))),
+            Field("TableName", "choice", choices=tuple(self.dropdown_owner_fields), default="FabricPiece"),
+            Field("FieldName", "choice", choices=all_fields, default="FabricName"),
             Field("ListItem"),
         )
-        self.dropdown_form = Form(window, fields)
+        self.dropdown_form = Form(window, fields, columns=3)
         self.dropdown_form.pack(fill="x")
-        ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
-                  "add form. Defined grain, print and status choices cannot be extended.",
-                  wraplength=720, padding=8).pack(anchor="w")
+        ttk.Label(window, text="Choose a database table or screen, then a field or button. "
+                  "FabricPiece choices continue to populate fabric forms.", wraplength=900, padding=8).pack(anchor="w")
         tools = ttk.Frame(window, padding=(8, 0))
         tools.pack(fill="x")
         self.add_working_list_tools(tools, "DropDown")
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
-        self.dropdown_list = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
+        self.dropdown_list = RecordList(window, DROPDOWN_COLUMNS)
+        tree = self.dropdown_list.tree
+        char_width = tkfont.nametofont("TkDefaultFont").measure("0" * 5) + 10
+        for name, width in (
+            ("TableName", 150), ("FieldName", 160), ("ListItem", 220),
+            ("Def", char_width), ("Use", char_width),
+        ):
+            tree.column(name, width=width, minwidth=width, stretch=False)
+        for name in DROPDOWN_COLUMNS:
+            tree.column(name, stretch=False)
         self.dropdown_list.pack(fill="both", expand=True)
         self.button(actions, "Add Item", self.add_dropdown)
         self.button(actions, "Set Default", self.set_dropdown_default)
         self.dropdown_states = {
-            name: self.new_list_state(self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS)
-            for name in self.dropdown_names.values()
+            (table_name, field_name): self.new_list_state(
+                self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS,
+            )
+            for table_name, names in self.dropdown_owner_fields.items()
+            for field_name in names
         }
+        self.dropdown_form.widgets["TableName"].bind(
+            "<<ComboboxSelected>>", self.command(self.dropdown_table_changed))
         self.dropdown_form.widgets["FieldName"].bind(
             "<<ComboboxSelected>>", self.command(self.refresh_dropdowns))
         self.dropdown_initial = self.dropdown_form.values()
         self.refresh_dropdowns()
 
+    def dropdown_table(self):
+        table_name = self.dropdown_form.variables["TableName"].get()
+        if table_name not in self.dropdown_owner_fields:
+            raise FieldError("Choice", "TableName")
+        return table_name
+
     def dropdown_field(self):
-        values = validate_fields(self.dropdown_form.fields, self.dropdown_form.values())
-        return self.dropdown_names[values["FieldName"]]
+        field_name = self.dropdown_form.variables["FieldName"].get()
+        if field_name not in self.dropdown_owner_fields[self.dropdown_table()]:
+            raise FieldError("Choice", "FieldName")
+        return field_name
+
+    def dropdown_key(self):
+        return self.dropdown_table(), self.dropdown_field()
+
+    def dropdown_table_changed(self):
+        table_name = self.dropdown_table()
+        fields = self.dropdown_owner_fields[table_name]
+        field_name = self.dropdown_form.variables["FieldName"].get()
+        self.dropdown_form.widgets["FieldName"].configure(values=fields)
+        if field_name not in fields:
+            field_name = fields[0]
+            self.dropdown_form.variables["FieldName"].set(field_name)
+        self.dropdown_initial["TableName"] = table_name
+        self.dropdown_initial["FieldName"] = field_name
+        self.refresh_dropdowns()
 
     def refresh_dropdowns(self):
-        name = self.dropdown_field()
-        state = self.dropdown_states[name]
+        table_name, field_name = self.dropdown_key()
+        state = self.dropdown_states[table_name, field_name]
         order = self.working_list_sort("DropDown", state)
-        rows = self.db.dropdown_rows(name, state["filters"], state["selected_ids"], order)
-        for row in rows:
-            row["FieldName"] = caption(row["FieldName"])
+        rows = self.db.dropdown_rows(
+            field_name, state["filters"], state["selected_ids"], order, table_name,
+        )
         context = self.list_context(state)
         self.dropdown_list.fill(
             rows, "dropdown records", order, context)
         self.form.refresh_choices()
+        self.dropdown_initial["TableName"] = table_name
         self.dropdown_initial["FieldName"] = self.dropdown_form.values()["FieldName"]
 
     def add_dropdown(self):
-        self.db.add_dropdown_item(self.dropdown_field(), self.dropdown_form.values()["ListItem"])
+        table_name, field_name = self.dropdown_key()
+        self.db.add_dropdown_choice(
+            table_name, field_name, self.dropdown_form.variables["ListItem"].get(),
+        )
         self.dropdown_form.variables["ListItem"].set("")
         self.dropdown_initial = self.dropdown_form.values()
         self.refresh_dropdowns()
@@ -856,7 +903,9 @@ class Application:
         ttk.Label(self.error_page, text="Reference edits do not change runtime error dialogs. "
                   "Numbered fixes correspond to numbered likely causes; braces mark variable details.",
                   wraplength=1100).pack(anchor="w")
-        self.error_form = Form(self.error_page, ERROR_FIELDS, columns=1, style="Entry.TFrame")
+        self.error_form = Form(
+            self.error_page, ERROR_FIELDS, columns=3, style="Entry.TFrame", memo_height=1, memo_width=28,
+        )
         self.error_form.pack(fill="x")
         self.error_details = ttk.Label(self.error_page, padding=4)
         self.error_details.pack(anchor="w")
@@ -1109,9 +1158,10 @@ class Application:
             refresh = refresh or {"DropDown": self.refresh_dropdowns,
                                   "HelpText": self.refresh_help}.get(screen)
             if screen == "DropDown":
-                scope = scope or self.dropdown_field()
+                scope = scope or self.dropdown_key()
                 list_rows = rows or (lambda: self.db.dropdown_rows(
-                    scope, state["filters"], state["selected_ids"], state["sort"],
+                    scope[1], state["filters"], state["selected_ids"], state["sort"],
+                    scope[0],
                 ))
             elif screen == "HelpText":
                 scope = None

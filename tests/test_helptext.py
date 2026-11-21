@@ -141,6 +141,53 @@ class HelpTextTests(unittest.TestCase):
         with sqlite3.connect(self.db.upgrade_backup) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 4)
 
+    def test_version_five_upgrade_generalizes_dropdown_keys_and_preserves_sets(self):
+        color = self.db.add_dropdown_item("Color", "Blue")
+        color_id = next(row["ID"] for row in self.db.dropdown_rows("Color")
+                        if row["ListItem"] == color)
+        set_id = self.db.save_set("Blue colors", [color_id], "DropDown", "Color")
+        with self.db.connection:
+            self.db.connection.execute("DROP INDEX DropdownDefaultIndex")
+            self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
+            self.db.connection.execute("""
+                CREATE TABLE Dropdown (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    TableName TEXT NOT NULL CHECK(TableName = 'FabricPiece'),
+                    FieldName TEXT NOT NULL,
+                    ListItem TEXT NOT NULL COLLATE NOCASE CHECK(length(ListItem) <= 120),
+                    Def INTEGER NOT NULL DEFAULT 0 CHECK(Def IN (0, 1)),
+                    Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
+                    UNIQUE(TableName, FieldName, ListItem)
+                )
+            """)
+            self.db.connection.execute(
+                "INSERT INTO Dropdown SELECT * FROM DropdownCurrent")
+            self.db.connection.execute("DROP TABLE DropdownCurrent")
+            self.db.connection.execute(
+                "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
+                "WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute(
+                "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (set_id,))
+            self.db.connection.execute("PRAGMA user_version = 5")
+        self.db.close()
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.dropdown_rows("Color")[1]["ID"], color_id)
+        self.assertEqual(self.db.set_members(
+            set_id, "DropDown", ("FabricPiece", "Color")), [color_id])
+        self.db.add_dropdown_choice("HelpText", "Update", "Apply help changes")
+        row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
+        self.assertEqual((row["TableName"], row["FieldName"], row["ListItem"]),
+                         ("HelpText", "Update", "Apply help changes"))
+        self.db.add_dropdown_choice("HelpText", "Update", "Save help changes")
+        rows = self.db.dropdown_rows("Update", table_name="HelpText")
+        first_id = next(item["ID"] for item in rows if item["ListItem"] == "Apply help changes")
+        second_id = next(item["ID"] for item in rows if item["ListItem"] == "Save help changes")
+        self.db.set_dropdown_default(first_id)
+        self.db.set_dropdown_default(second_id)
+        rows = {item["ListItem"]: item["Def"] for item in self.db.dropdown_rows(
+            "Update", table_name="HelpText")}
+        self.assertEqual(rows, {"Apply help changes": 0, "Save help changes": 1})
+
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:

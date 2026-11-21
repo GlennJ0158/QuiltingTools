@@ -5,6 +5,7 @@ from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 
 NAVIGATION = ("Fabric", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
 DROPDOWN_FORM_FIELDS = (
+    Field("TableName", "choice"),
     Field("FieldName", "choice"),
     Field("ListItem"),
 )
@@ -15,7 +16,7 @@ HELP_FIELDS = (
     Field("FullText", required=True, limit=16000, kind="memo", width=80),
 )
 HELP_COLUMNS = ("ID", "TableName", "FieldName", "HoverText", "FullText")
-DROPDOWN_COLUMNS = ("ID", "FieldName", "ListItem", "Def", "Use")
+DROPDOWN_COLUMNS = ("ID", "TableName", "FieldName", "ListItem", "Def", "Use")
 HISTORY_COLUMNS = ("ID", "Action", "DateCreated")
 DROPDOWN_FILTER_FIELDS = (
     Field("ListItem"),
@@ -43,12 +44,12 @@ SCREEN_HELP = {
         "committed records are never undone.",
     ),
     "DropDown": (
-        "Maintain fabric choices and defaults for new records.",
-        "Choose a fabric field to list its active choices. Select Highlighted, Filter, Set Selection "
-        "and Sort operate on that field's list; saved sets are separate for each field. Add Item saves "
-        "a new choice immediately. Highlight one row and choose Set Default to use it on the next new "
-        "or cleared fabric form. Blank can be a default. Grain Direction, Print Direction and Status "
-        "have fixed choices that cannot be extended. Existing fabric records are not changed.",
+        "Maintain values keyed by database table or application screen.",
+        "Choose a Table Name (a database table or screen) and its Field Name or Button Name. "
+        "The list shows values for that key. Select Highlighted, Filter, Set Selection and Sort "
+        "manage the current list. Add Item saves a value. FabricPiece fields continue to provide "
+        "the choices used by fabric entry forms; screen and other table values are stored for their "
+        "corresponding keys.",
     ),
     "Add Item": (
         "Add a fabric choice without saving the fabric form.",
@@ -135,21 +136,21 @@ SCREEN_HELP = {
         "minute. This screen is read-only.",
     ),
     "DropDown Filter": (
-        "Restrict the active choices for the selected fabric field.",
-        "List Item matches literal text anywhere in the choice, ignoring case. Default selects "
-        "only the current default or all other choices. Apply updates this field's working list; "
+        "Restrict the active values for the selected table or screen key.",
+        "List Item matches literal text anywhere in the value, ignoring case. Default selects "
+        "only the current default or all other values. Apply updates this key's working list; "
         "Reset Selection removes the filter and highlighted-row restriction.",
     ),
     "DropDown Sort": (
-        "Choose the active choices' saved multi-field order.",
+        "Choose the selected key's saved multi-field order.",
         "Choose distinct columns in priority order, with asc or desc for each. Leave unused rows "
         "blank. The default order puts the default choice first; ID is appended to break ties.",
     ),
     "DropDown Set": (
-        "Save or recall a snapshot of the selected fabric field's choices.",
-        "Save Current saves IDs of all listed choices, not just highlights. Sets are scoped to the "
-        "currently selected field. Applying a set clears other list restrictions; deleting it "
-        "never changes the source choices.",
+        "Save or recall a snapshot of the selected key's values.",
+        "Save Current saves IDs of all listed values, not just highlights. Sets are scoped to the "
+        "selected Table Name and Field Name. Applying a set clears other list restrictions; "
+        "deleting it never changes the source values.",
     ),
     "HelpText Filter": (
         "Search the HelpText working list.",
@@ -298,8 +299,9 @@ BUTTON_HELP = {
     "Add Item": ("Save a choice for the selected fabric field.", "Enter a nonblank item up to 120 "
                  "characters. Existing names differing only in ASCII case or surrounding spaces "
                  "reuse the stored spelling. Fixed direction and status choices cannot be extended."),
-    "Set Default": ("Use the highlighted item on new fabric forms.", "Select exactly one active "
-                    "dropdown record. Save its default immediately without modifying saved fabric."),
+    "Set Default": ("Mark the highlighted item as this key's default.", "Select exactly one active "
+                    "dropdown record. Save its default immediately; FabricPiece form defaults "
+                    "change for new or cleared forms, but saved fabric is not modified."),
     "Apply": ("Validate and apply this dialog's settings.", "Apply the current criteria or sort "
               "and close the dialog. Invalid input leaves the dialog open for correction."),
     "Clear Fields": ("Reset this dialog's input fields.", "Clear optional inputs and restore field "
@@ -350,7 +352,7 @@ SCREEN_FIELDS = {
 SCREEN_COLUMNS = {
     "ErrorMessage": ERROR_COLUMNS,
     "Fabric": LIST_COLUMNS,
-    "DropDown": ("ID", "FieldName", "ListItem", "Def", "Use"),
+    "DropDown": DROPDOWN_COLUMNS,
     "HelpText": HELP_COLUMNS,
     "History": ("ID", "Action", "DateCreated"),
 }
@@ -386,12 +388,12 @@ SCREEN_BUTTONS = {
 COLUMN_HELP = {
     "ID": ("Unique saved record number.", "Database-generated identity for this record; not a row "
            "count or list position. The identity remains stable when the list is sorted."),
-    "Def": ("Whether this item is the field's default.", "1 marks the active default; 0 means it "
-            "is not the default. Use Set Default to change the value used by new fabric forms."),
-    "Use": ("Whether this dropdown choice is active.", "1 means the choice is active and available "
-            "to fabric entry forms. This maintenance screen lists active choices."),
-    "ListItem": ("Saved dropdown choice.", "The exact stored spelling offered in fabric forms. "
-                 "Blank is permitted as a default; use Add Item for new nonblank choices."),
+    "Def": ("Whether this item is the key's default.", "1 marks the active default; 0 means it "
+            "is not the default. Use Set Default to change the value marked for this key."),
+    "Use": ("Whether this dropdown value is active.", "1 means the value is active and appears "
+            "in this maintenance list. FabricPiece fields also offer active values to fabric forms."),
+    "ListItem": ("Saved value for this key.", "The exact stored spelling for the selected "
+                 "Table Name and Field Name. FabricPiece field values appear in fabric forms."),
     "Action": ("Type of saved inventory change.", "Added creates a new physical rectangle; Updated "
                "changes an existing one. Highlight the row to review Before and After values."),
     "DateCreated": ("When this change was committed.", "Displayed in local time to the minute. "
@@ -413,6 +415,10 @@ def default_help():
                 hover, full = "Save the selected help pair.", (
                     "Save Hover Text and Full Text for the selected generated key. Keys stay "
                     "unchanged. New tooltip and F1 lookups use the saved text immediately.")
+            if screen == "DropDown" and button == "Add Item":
+                hover, full = ("Save a value for the selected table or screen key.",
+                               "Enter a nonblank value for the selected Table Name and Field Name. "
+                               "FabricPiece fields retain their existing validation and canonicalization.")
             if screen == "HelpText" and button == "Set Selection":
                 hover, full = "Save or recall a HelpText list snapshot.", SCREEN_HELP["HelpText Set"][1]
             if screen == "ErrorMessage" and button in (
@@ -449,10 +455,15 @@ def default_help():
                               "asc sorts smallest to largest or A to Z; desc reverses the order. "
                               "This direction applies to the field on the same row."))
             elif screen == "DropDown":
-                pair = (("Choose the fabric field to maintain.",
-                         "Select a field to list its active choices and default. Changing this "
-                         "selection does not modify any saved fabric.") if field.name == "FieldName"
-                        else COLUMN_HELP["ListItem"])
+                pair = {
+                    "TableName": ("Choose a database table or application screen.",
+                                  "Choose the key owner for the value list. Screen names and database "
+                                  "table names are supported."),
+                    "FieldName": ("Choose a field or button within the selected owner.",
+                                  "The available names depend on Table Name. Screen button captions "
+                                  "can also identify a value list."),
+                    "ListItem": COLUMN_HELP["ListItem"],
+                }[field.name]
             elif screen == "Error Filter":
                 pair = (f"Search {field.label.lower()}.",
                         "Blank means no restriction. Match literal text anywhere in this field, "
@@ -479,9 +490,12 @@ def default_help():
             rows[screen, field.name] = pair
         for column in SCREEN_COLUMNS.get(screen, ()):
             pair = COLUMN_HELP.get(column) or FIELD_HELP[column]
+            if column == "TableName" and screen == "DropDown":
+                pair = ("Database table or screen owning this value.",
+                        "Identifies the table or application screen paired with Field Name.")
             if column == "FieldName" and screen == "DropDown":
-                pair = ("Fabric field owning this choice.",
-                        "The fabric field whose dropdown list contains this item.")
+                pair = ("Field or button owning this value list.",
+                        "The field or button paired with the Table Name or application screen.")
             hover, full = pair
             if screen == "HelpText":
                 full += " Use Sort to configure the saved multi-column HelpText order."

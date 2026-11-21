@@ -17,8 +17,9 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
 automatically. Databases from versions 0.1 through 0.4 prompt for a backed-up upgrade
-to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1) and working-list
-selection snapshots; declining leaves the database unchanged. Close all other copies
+to add ErrorMessage (plus HelpText before 0.3 and Dropdown for 0.1), working-list
+selection snapshots and generalized table/screen dropdown keys; declining leaves
+the database unchanged. Close all other copies
 of the application before accepting. A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
@@ -152,10 +153,14 @@ case or surrounding whitespace reuse the existing spelling rather than creating
 duplicates. Saving fabric also registers/canonicalizes these values at the
 database boundary.
 
-Open **DropDown** from the navigation bar, choose a field, highlight an item, and use
-**Set Default**. The next cleared/new form uses that default; existing records
-are not changed. Navigating away from Fabric discards unsaved form values after
-confirmation. The DropDown screen can also add items.
+Open **DropDown** from the navigation bar and choose a database **Table Name** or
+application screen, then its **Field Name** or button name; **List Item** adds a value
+for that key. Values are listed and saved per key. FabricPiece dropdown fields continue
+to populate fabric forms; other table/screen keys are stored independently. Highlight
+an item and use **Set Default** to mark the default for that key. The next cleared/new
+fabric form uses its existing FabricPiece field default; existing records are not
+changed. Def and Use are five-character columns, and unused list width remains at the
+right edge. Navigating away from Fabric discards unsaved form values after confirmation.
 Grain Direction, Print Direction and Status get their defaults from the same
 `Dropdown` table, but keep their defined choices: arbitrary directions or stock
 statuses cannot be added.
@@ -192,8 +197,8 @@ Press F1 in an editable field for help.
 
 The **DropDown** choices, **HelpText** catalog and read-only **History** list use
 the same selection, filtering, named-set and multi-column sort workflow. Dropdown
-sets are scoped to the currently selected fabric field; History sets are scoped
-to the currently selected piece. Dropdown filters search List Item or select
+sets are scoped to the currently selected Table Name and Field Name; History sets
+are scoped to the currently selected piece. Dropdown filters search List Item or select
 default/non-default rows. HelpText filters search each text/key column. History
 filters match action, timestamp or saved Before/After values. Each list's sort is
 saved independently; HelpText no longer relies on heading-click sorting. Applying
