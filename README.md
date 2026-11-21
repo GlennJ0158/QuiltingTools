@@ -150,8 +150,10 @@ Metric entry/conversion is not yet implemented.
 ### Quilt backs
 
 Open **Quilt Backs** to enter a name, quilt width/length, one equal overhang margin
-for all four sides, and one seam allowance used at every seam. Select available
-fabric rectangles, optionally choose a controlled **Sketch Color** for each source,
+for all four sides, and one seam allowance used at every seam. The available
+fabric list follows the Fabric Inventory working selection and filters. Highlight
+rectangles to restrict a plan, or leave none highlighted to use all listed available
+rectangles. Optionally choose a controlled **Sketch Color** for each source,
 and choose **Generate Plans**. Color suggestions are derived from inventory text,
 but can be overridden for the plan. No swatch data is added to inventory. The
 assembly sketch shades every finished panel with its palette color, marks known
@@ -159,8 +161,8 @@ grain with arrows, identifies unknown grain, and includes a legend with the
 inventory fabric name and recorded color description.
 
 The first planner release generates one-piece or equal-width vertical-strip or
-equal-length horizontal-strip layouts, up to 20 panels. It only uses the selected
-available rectangles, never silently rotates them, and checks a nonoverlapping
+equal-length horizontal-strip layouts, up to 20 panels. It uses the highlighted
+rectangles if any, otherwise all listed available rectangles, never silently rotates them, and checks a nonoverlapping
 shelf-cut placement within each source piece. A single rectangle can supply multiple
 panels. The planner ranks feasible plans by panel-size tier (20% of quilt size
 preferred, then 10%; every panel is at least 5 inches), known consistent grain,
@@ -224,7 +226,7 @@ entered physical allowance. Changes of scale require a new version once approved
 Use **Map Color** to associate each part's sketch color with one or more existing
 inventory Color values. No inferred color substitutions are made. **Plan Quilt**
 aggregates all selected blocks' parts and packs their cut-outline bounding
-rectangles into Available fabric. It prefers an already used source with space,
+rectangles into Available fabric in the Fabric Inventory working list. It prefers an already used source with space,
 then a fitting leftover region and smaller source area. Parts can rotate 90 degrees;
 the plan records source orientation, assembly rotation, mirrored instances, grain
 and print descriptions for operator review. Many parts can share one source.

@@ -288,11 +288,13 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         ttk.Label(body, text=f"Fabric Inventory - v{VERSION}", font=("TkDefaultFont", 14, "bold"),
                   padding=8).pack(anchor="w")
         ttk.Label(body, text=f"Database: {self.db.path}", padding=(8, 0, 8, 4)).pack(anchor="w")
-        self.form = Form(body, FABRIC_FIELDS, style="Entry.TFrame", database=self.db)
+        entry = ttk.Frame(body, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.form = Form(entry, FABRIC_FIELDS, style="Entry.TFrame", database=self.db)
         self.form.pack(fill="x")
-        self.details = ttk.Label(body, text="New fabric rectangle", padding=(8, 4))
+        self.details = ttk.Label(entry, text="New fabric rectangle", padding=(8, 4), style="Entry.TLabel")
         self.details.pack(anchor="w")
-        actions = ttk.Frame(body, padding=8)
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
         actions.pack(fill="x")
         self.add_button = self.button(actions, "Add", self.add)
         self.update_button = self.button(actions, "Update", self.update)
@@ -306,8 +308,6 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.button(utilities, "Restore Database", self.restore)
         ttk.Label(self.setup_page, text="Restore creates a new database; it never replaces the open one. "
                   "Dropdown defaults apply to new forms, not existing inventory.", wraplength=800).pack(anchor="w")
-        tools = ttk.Frame(body, padding=(8, 0))
-        tools.pack(fill="x")
         self.list_buttons = []
         for label, action in (
             ("Select Highlighted", self.select_highlighted),
@@ -317,7 +317,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             ("Sort", self.open_sort),
             ("Refresh", self.refresh_view),
         ):
-            self.list_buttons.append(self.button(tools, label, action))
+            self.list_buttons.append(self.button(actions, label, action))
         self.list = RecordList(body, LIST_COLUMNS)
         self.list.pack(fill="both", expand=True)
         self.list.tree.bind("<<TreeviewSelect>>", self.command(self.on_select))
@@ -356,6 +356,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
     def navigation(self, parent):
         bar = ttk.Frame(parent, padding=(8, 4))
         bar.pack(fill="x", side="top")
+        bar.title = ttk.Label(bar, text="", font=("TkDefaultFont", 14, "bold"))
+        bar.title.pack(side="left")
         buttons = ttk.Frame(bar)
         buttons.pack(side="right")
         bar.buttons = {}
@@ -430,6 +432,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.screens[self.current].pack_forget()
         self.current = name
         self.screens[name].pack(fill="both", expand=True)
+        self.nav.title.configure(text="Quilt Backs" if name == "Quilt Backs" else "")
         self.root.title(f"Quilting Tools v{VERSION} - {name}")
 
     def command(self, action):
@@ -987,14 +990,6 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.refresh_errors()
 
     def build_backs(self):
-        ttk.Label(self.backs_page, text="Quilt Backs",
-                  font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.backs_page,
-            text="Plan rectangular panels from available pieces. Margin is equal on all sides; "
-                 "one seam allowance applies to every join. Drafts do not change inventory.",
-            wraplength=1100,
-        ).pack(anchor="w")
         entry = ttk.Frame(self.backs_page, style="Entry.TFrame")
         entry.pack(fill="x")
         self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
@@ -1022,10 +1017,10 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_candidates.tree.bind(
             "<<TreeviewSelect>>", self.command(self.on_back_candidate_select),
         )
-        ttk.Label(self.backs_page, text="Saved plans").pack(anchor="w", padx=8)
         self.back_state = self.new_list_state(self.db.load_sort("QuiltBackSort"), BACK_FILTER_FIELDS)
         tools = ttk.Frame(self.backs_page, padding=(8, 0))
         tools.pack(fill="x")
+        ttk.Label(tools, text="Saved plans").pack(side="left", padx=(0, 10))
         self.add_working_list_tools(
             tools, "Quilt Backs", refresh=self.refresh_backs,
             rows=lambda: self.db.quilt_backs(
@@ -1052,10 +1047,12 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_assembled_button.state(["disabled"])
 
     def refresh_back_stock(self):
-        filters = {field.name: "" for field in FILTER_FIELDS}
-        filters["Status"] = "Available"
-        rows = self.db.pieces(filters, sort=self.sort)
+        rows = self.available_inventory()
         self.back_stock.fill(rows, "available fabric rectangles", self.sort)
+
+    def available_inventory(self):
+        return [row for row in self.db.pieces(self.filters, self.selected_ids, self.sort)
+                if row["Status"] == "Available"]
 
     def refresh_backs(self, prefer_id=None):
         selected = self.back_list.tree.selection()
@@ -1071,8 +1068,6 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def generate_back_plans(self):
         selected = self.back_stock.tree.selection()
-        if not selected:
-            raise FieldError("NoHighlight", "FabricPiece")
         values = self.back_form.values()
         quilt_width = measurement(values["QuiltWidth"], "QuiltWidth")
         quilt_length = measurement(values["QuiltLength"], "QuiltLength")
@@ -1081,7 +1076,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
             if values["SeamAllowance"] else 0
         )
-        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected]
+        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.available_inventory()
         self.back_selected_id = None
         self.back_list.tree.selection_remove(self.back_list.tree.selection())
         self.back_confirm_button.state(["disabled"])

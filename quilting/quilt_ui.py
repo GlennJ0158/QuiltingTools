@@ -15,23 +15,26 @@ class QuiltScreenMixin:
         from .ui import Form
         ttk.Label(self.quilt_page, text="Quilts and Cutting Plans",
                   font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.quilt_name_form = Form(self.quilt_page, (Field("QuiltName", required=True),), columns=1)
+        entry = ttk.Frame(self.quilt_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.quilt_name_form = Form(entry, (Field("QuiltName", required=True),),
+                                    columns=1, style="Entry.TFrame")
         self.quilt_name_form.pack(fill="x")
-        bar = ttk.Frame(self.quilt_page, padding=4)
+        bar = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         bar.pack(fill="x")
         self.button(bar, "Add Quilt", self.add_quilt)
         self.quilt_choice = ttk.Combobox(bar, state="readonly", width=45)
         self.quilt_choice.pack(side="left", padx=8)
         self.attach_help(self.quilt_choice, "SavedQuilt")
         self.quilt_choice.bind("<<ComboboxSelected>>", self.command(self.open_quilt))
-        self.quilt_status = ttk.Label(bar, text="No quilt selected")
+        self.quilt_status = ttk.Label(bar, text="No quilt selected", style="Entry.TLabel")
         self.quilt_status.pack(side="left")
-        self.quilt_form = Form(self.quilt_page, (
+        self.quilt_form = Form(entry, (
             Field("ApprovedBlock", "choice"), Field("Quantity", default="1"),
             Field("PartColor", "choice", choices=COLORS),
             Field("InventoryColor", "choice")), columns=2, style="Entry.TFrame")
         self.quilt_form.pack(fill="x")
-        actions = ttk.Frame(self.quilt_page, padding=4)
+        actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
         for label, action in (("Set Block Quantity", self.set_quilt_block),
                               ("Remove Block", self.remove_quilt_block),
@@ -174,7 +177,8 @@ class QuiltScreenMixin:
                 or self.quilt_name_form.values() != self.quilt_name_initial):
             raise FieldError("Database", "Quilt", detail="Save block quantities and color mappings, "
                              "or clear unsaved inputs before planning.")
-        plan_id = self.db.create_quilt_plan(quilt_id, self.quilt_revision)
+        plan_id = self.db.create_quilt_plan(
+            quilt_id, self.quilt_revision, [row["ID"] for row in self.available_inventory()])
         self.quilt_initial = self.quilt_form.values()
         self.load_quilt(quilt_id)
         self.load_quilt_plan(plan_id)
