@@ -18,6 +18,11 @@ HELP_COLUMNS = ("ID", "TableName", "FieldName", "HoverText", "FullText")
 DROPDOWN_COLUMNS = ("ID", "FieldName", "ListItem", "Def", "Use")
 HISTORY_COLUMNS = ("ID", "Action", "DateCreated")
 BACK_LAYOUT_COLUMNS = ("ID", "Layout", "Parts", "Seams", "Grain", "Minimum", "FabricArea")
+BACK_COLUMNS = ("ID", "BackName", "BackWidth", "BackLength", "Status", "DateModified")
+BACK_FILTER_FIELDS = (
+    Field("BackName"),
+    Field("Status", "choice", choices=("", "Draft", "Cut", "Assembled")),
+)
 DROPDOWN_FILTER_FIELDS = (
     Field("ListItem"),
     Field("Default", "choice", choices=("", "Yes", "No")),
@@ -53,7 +58,21 @@ SCREEN_HELP = {
         "source pieces. Source pieces are not rotated. Set a controlled sketch color per selected fabric; the "
         "legend also shows its inventory color description. Saving a draft does not change inventory. "
         "Confirm Cuts asks the operator to report any reusable remainder; source retirement and "
-        "remnant creation are committed together.",
+        "remnant creation are committed together. The Saved Plans controls filter, select and sort "
+        "saved backs independently of fabric and candidate plans.",
+    ),
+    "Quilt Backs Filter": (
+        "Filter saved quilt backs.",
+        "Match literal text in Back Name and optionally choose a status. Both criteria apply together.",
+    ),
+    "Quilt Backs Sort": (
+        "Choose the saved quilt backs order.",
+        "Choose distinct columns and directions. Dimensions and IDs sort numerically; ID breaks ties.",
+    ),
+    "Quilt Backs Set": (
+        "Save or recall a snapshot of saved quilt backs.",
+        "Save Current saves all listed back IDs. Apply Saved clears other restrictions; "
+        "Delete Saved removes only the snapshot.",
     ),
     "DropDown": (
         "Maintain fabric choices and defaults for new records.",
@@ -85,7 +104,7 @@ SCREEN_HELP = {
         "Add, Update or Delete reference messages using Error Text, Likely Cause and Description. "
         "Numbered fixes in Description correspond to numbered likely causes. ID is generated. "
         "Select Highlighted restricts the working list; Filter searches text in all three fields; "
-        "Set saves or recalls named snapshots; Sort saves multi-column ordering. Reset Selection "
+        "Set Selection saves or recalls named snapshots; Sort saves multi-column ordering. Reset Selection "
         "shows all messages. Print saves an HTML report of exactly the displayed rows in their "
         "current order and opens the browser print dialog. Empty lists print headings only. "
         "Unsaved form text is not printed. Reference edits and deletions do not change runtime "
@@ -279,8 +298,6 @@ BUTTON_HELP = {
     "ErrorMessage": ("Open error-message maintenance.", "Switch to the searchable troubleshooting reference."),
     "Delete": ("Delete the highlighted reference message.", "Highlight exactly one message. After "
                "confirmation, delete its reference entry and saved-set memberships, not runtime ErrorText."),
-    "Set": ("Save or recall an error-message working list.", "Manage named snapshots of all currently "
-            "listed message IDs. These sets are independent of Fabric selections."),
     "Print": ("Print exactly the listed messages in their current order.", "Save an HTML report, "
               "then use the browser print dialog. All listed messages are included, not just "
               "highlights; unsaved form edits are excluded. If the browser does not open, open "
@@ -370,6 +387,10 @@ SCREEN_FIELDS = {
         Field("Margin", "length", default="4"),
         Field("SeamAllowance", "length", default="1/2"),
     ),
+    "Quilt Backs Filter": BACK_FILTER_FIELDS,
+    "Quilt Backs Sort": tuple(field for index in range(1, len(BACK_COLUMNS) + 1) for field in (
+        Field(f"SortField{index}"), Field(f"Direction{index}"))),
+    "Quilt Backs Set": (Field("SavedSet"), Field("SetName")),
     "Filter": FILTER_FIELDS,
     "DropDown": DROPDOWN_FORM_FIELDS,
     "DropDown Filter": DROPDOWN_FILTER_FIELDS,
@@ -405,24 +426,28 @@ SCREEN_COLUMNS = {
 }
 SCREEN_BUTTONS = {
     "ErrorMessage": ("Add", "Update", "Delete", "Clear", "Select Highlighted", "Filter",
-                     "Set", "Sort", "Reset Selection", "Refresh", "Print"),
+                     "Set Selection", "Reset Selection", "Sort", "Refresh", "Print"),
     "Error Filter": ("Apply", "Clear Fields", "Cancel"),
     "Error Sort": ("Apply", "Clear Fields", "Cancel"),
     "Error Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Quilt Backs": ("Generate Plans", "Set Sketch Color", "Preview Sketch", "Save Draft",
-                    "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric"),
-    "DropDown": ("Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection",
+                    "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric",
+                    "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort"),
+    "Quilt Backs Filter": ("Apply", "Clear Fields", "Cancel"),
+    "Quilt Backs Sort": ("Apply", "Clear Fields", "Cancel"),
+    "Quilt Backs Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
+    "DropDown": ("Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
                  "Add Item", "Set Default"),
     "Add Item": ("Add Item", "Cancel"),
     "HelpText": ("Update", "Clear", "Select Highlighted", "Filter", "Set Selection",
-                 "Sort", "Reset Selection"),
+                 "Reset Selection", "Sort"),
     "Setup": ("Backup Database", "Restore Database"),
     "Filter": ("Apply", "Clear Fields", "Cancel"),
     "Sort": ("Apply", "Clear Fields", "Cancel"),
     "Set Selection": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
-    "History": ("Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Close"),
+    "History": ("Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort", "Close"),
     "DropDown Filter": ("Apply", "Clear Fields", "Cancel"),
     "DropDown Sort": ("Apply", "Clear Fields", "Cancel"),
     "DropDown Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
@@ -477,7 +502,7 @@ def default_help():
             if screen == "HelpText" and button == "Set Selection":
                 hover, full = "Save or recall a HelpText list snapshot.", SCREEN_HELP["HelpText Set"][1]
             if screen == "ErrorMessage" and button in (
-                    "Add", "Update", "Filter", "Sort", "Reset Selection"):
+                    "Add", "Update", "Filter", "Sort", "Reset Selection", "Set Selection"):
                 hover, full = {
                     "Add": ("Save a new reference message.", "Validate all three text fields and "
                             "save a new message with a generated ID, even when copying an existing row."),
@@ -485,10 +510,11 @@ def default_help():
                                "Save the form; stale changes are rejected. Runtime errors are unchanged."),
                     "Filter": SCREEN_HELP["Error Filter"],
                     "Sort": SCREEN_HELP["Error Sort"],
+                    "Set Selection": ("Save or recall an error-message working list.", SCREEN_HELP["Error Set"][1]),
                     "Reset Selection": ("Show all saved reference messages.", "Clear text filters "
                                         "and saved-set/highlight restrictions without deleting messages."),
                 }[button]
-            if screen in ("DropDown", "HelpText", "History") and button in (
+            if screen in ("DropDown", "HelpText", "History", "Quilt Backs") and button in (
                     "Filter", "Set Selection", "Sort", "Reset Selection"):
                 if button == "Set Selection":
                     hover, full = "Save or recall a working-list snapshot.", SCREEN_HELP[f"{screen} Set"][1]
@@ -502,7 +528,7 @@ def default_help():
                                "current working list remain unchanged.")
             rows[screen, f"Button:{button}"] = hover, full
         for field in SCREEN_FIELDS.get(screen, ()):
-            if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort"):
+            if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort", "Quilt Backs Sort"):
                 pair = (("Choose a distinct field for this priority.",
                          "Choose a list column; earlier rows have higher priority. Leave unused "
                          "rows blank. ID is appended as a tie-breaker.") if field.name.startswith("SortField")
@@ -524,7 +550,7 @@ def default_help():
                 pair = ("Match a saved inventory action.", SCREEN_HELP[screen][1])
             elif screen == "History Filter" and field.name == "Values":
                 pair = ("Search saved Before and After values.", SCREEN_HELP[screen][1])
-            elif screen in ("DropDown Filter", "HelpText Filter", "History Filter"):
+            elif screen in ("DropDown Filter", "HelpText Filter", "History Filter", "Quilt Backs Filter"):
                 pair = (f"Filter by {field.label.lower()}.", SCREEN_HELP[screen][1])
             elif screen.endswith(" Set") and field.name == "SavedSet":
                 pair = ("Choose a saved working-list snapshot.", SCREEN_HELP[screen][1])

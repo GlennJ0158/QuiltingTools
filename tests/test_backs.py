@@ -6,7 +6,7 @@ from pathlib import Path
 from quilting.backs import (
     INCH, PALETTE, generate_layouts, layout_svg, palette_suggestion, ratio_label,
 )
-from quilting.database import Database, UpgradeRequired
+from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
 from tests.test_inventory import fabric
 
@@ -181,7 +181,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
         with self.assertRaises(UpgradeRequired):
             Database(self.path)
         self.db = Database(self.path, upgrade=True)
-        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], 6)
+        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         self.assertEqual(self.db.pieces()[0]["FabricName"], "Legacy")
         with sqlite3.connect(self.db.upgrade_backup) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 5)
@@ -191,6 +191,45 @@ class QuiltBackPlanningTests(unittest.TestCase):
             )],
             ["QuiltBack", "QuiltBackCutSource", "QuiltBackPanel"],
         )
+
+    def test_version_six_upgrade_preserves_existing_working_sets(self):
+        help_id = self.db.help_rows()[0]["ID"]
+        set_id = self.db.save_set("Existing help", [help_id], "HelpText")
+        connection = self.db.connection
+        with connection:
+            connection.execute("ALTER TABLE WorkingListMember RENAME TO NewMember")
+            connection.execute("ALTER TABLE WorkingListSet RENAME TO NewSet")
+            connection.execute(
+                "CREATE TABLE WorkingListSet ("
+                "ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "ScreenName TEXT NOT NULL CHECK(ScreenName IN "
+                "('DropDown', 'HelpText', 'History')), "
+                "ScopeName TEXT NOT NULL DEFAULT '', "
+                "SetName TEXT NOT NULL CHECK(length(trim(SetName)) BETWEEN 1 AND 120), "
+                "DateCreated TEXT NOT NULL, "
+                "UNIQUE(ScreenName, ScopeName, SetName COLLATE NOCASE))"
+            )
+            connection.execute(
+                "CREATE TABLE WorkingListMember ("
+                "SelectionSetID INTEGER NOT NULL REFERENCES WorkingListSet(ID) ON DELETE CASCADE, "
+                "RecordID INTEGER NOT NULL, PRIMARY KEY (SelectionSetID, RecordID))"
+            )
+            connection.execute("INSERT INTO WorkingListSet SELECT * FROM NewSet")
+            connection.execute("INSERT INTO WorkingListMember SELECT * FROM NewMember")
+            connection.execute("DROP TABLE NewMember")
+            connection.execute("DROP TABLE NewSet")
+            connection.execute("PRAGMA user_version = 6")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.set_members(set_id, "HelpText"), [help_id])
+        self.assertEqual(self.db.connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(
+                backup.execute("SELECT RecordID FROM WorkingListMember").fetchone()[0], help_id,
+            )
 
 
 if __name__ == "__main__":
