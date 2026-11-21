@@ -12,8 +12,10 @@ from .backs import MAX_PANELS, MINIMUM_PART, PALETTE
 from .blocks import BLOCK_COLUMNS, BLOCK_FILTER_FIELDS, parse_block, parse_part, validate_layout
 from .quilt_planner import plan_quilt
 from .helptext import (
-    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
-    HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, default_help,
+    BACK_COLUMNS, BACK_FILTER_FIELDS, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS,
+    HELP_COLUMNS, HELP_FIELDS, HELP_FILTER_FIELDS,
+    HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, NAVIGATION, SCREEN_BUTTONS, SCREEN_COLUMNS,
+    SCREEN_FIELDS, SCREEN_HELP, default_help,
 )
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
 from .model import (
@@ -22,7 +24,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 BLOCK_SCHEMA = """
 CREATE TABLE QuiltBlock (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +122,7 @@ CREATE TABLE ErrorMessageMember (
 WORKING_LIST_SCHEMA = """
 CREATE TABLE WorkingListSet (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
-    ScreenName TEXT NOT NULL CHECK(ScreenName IN ('DropDown', 'HelpText', 'History')),
+    ScreenName TEXT NOT NULL CHECK(ScreenName IN ('DropDown', 'HelpText', 'History', 'Quilt Backs')),
     ScopeName TEXT NOT NULL DEFAULT '',
     SetName TEXT NOT NULL CHECK(length(trim(SetName)) BETWEEN 1 AND 120),
     DateCreated TEXT NOT NULL,
@@ -145,8 +147,8 @@ CREATE TABLE HelpText (
 DROPDOWN_SCHEMA = """
 CREATE TABLE Dropdown (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
-    TableName TEXT NOT NULL CHECK(TableName = 'FabricPiece'),
-    FieldName TEXT NOT NULL,
+    TableName TEXT NOT NULL CHECK(length(trim(TableName)) BETWEEN 1 AND 120),
+    FieldName TEXT NOT NULL CHECK(length(trim(FieldName)) BETWEEN 1 AND 120),
     ListItem TEXT NOT NULL COLLATE NOCASE CHECK(length(ListItem) <= 120),
     Def INTEGER NOT NULL DEFAULT 0 CHECK(Def IN (0, 1)),
     Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
@@ -300,20 +302,34 @@ TABLE_COLUMNS = {
 }
 SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
-    "DropDownSort": (("ID", "FieldName", "ListItem", "Def", "Use"),
+    "DropDownSort": (DROPDOWN_COLUMNS,
                      (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc"))),
     "HelpTextSort": (HELP_COLUMNS, (("TableName", "asc"), ("FieldName", "asc"), ("ID", "asc"))),
     "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
     "HistorySort": (("ID", "Action", "DateCreated"),
                     (("ID", "desc"),)),
     "QuiltBlockSort": (BLOCK_COLUMNS, (("BlockName", "asc"), ("ID", "asc"))),
+    "QuiltBackSort": (BACK_COLUMNS, (("DateModified", "desc"), ("ID", "desc"))),
 }
 SELECTION_TABLES = {
     "Fabric": ("SelectionSet", "SelectionMember", "FabricPieceID"),
     "ErrorMessage": ("ErrorMessageSet", "ErrorMessageMember", "ErrorMessageID"),
     "QuiltBlock": ("BlockSet", "BlockSetMember", "QuiltBlockID"),
 }
-WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History"))
+WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History", "Quilt Backs"))
+DROPDOWN_SCOPE_FIELDS = {
+    table: tuple(columns) for table, columns in TABLE_COLUMNS.items()
+}
+for screen in dict.fromkeys((*SCREEN_HELP, *SCREEN_FIELDS, *SCREEN_COLUMNS, *SCREEN_BUTTONS)):
+    names = tuple(dict.fromkeys((
+        *(field.name for field in SCREEN_FIELDS.get(screen, ())),
+        *SCREEN_COLUMNS.get(screen, ()),
+        *SCREEN_BUTTONS.get(screen, ()),
+        *NAVIGATION,
+    )))
+    DROPDOWN_SCOPE_FIELDS[screen] = tuple(dict.fromkeys(
+        (*DROPDOWN_SCOPE_FIELDS.get(screen, ()), *names),
+    ))
 
 
 def now():
@@ -348,7 +364,7 @@ class Database:
                     self._seed_errors()
             elif (self.connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
                   and self.connection.execute("PRAGMA user_version").fetchone()[0] in
-                  (1, 2, 3, 4, 5, 6)):
+                  (1, 2, 3, 4, 5, 6, 7, 8)):
                 self.validate(self.connection, allow_legacy=True)
                 if not upgrade:
                     raise UpgradeRequired()
@@ -367,11 +383,11 @@ class Database:
     def validate(connection, allow_legacy=False):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
-                or version not in ((1, 2, 3, 4, 5, 6, SCHEMA_VERSION)
+                or version not in ((1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION)
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
-            if version < 7 and table in ("QuiltBlock", "BlockPart", "BlockPartPlacement", "BlockSet",
+            if version < 9 and table in ("QuiltBlock", "BlockPart", "BlockPartPlacement", "BlockSet",
                                          "BlockSetMember", "Quilt", "QuiltBlockUse", "QuiltColorMap", "QuiltPlan"):
                 continue
             if version < 5 and table in ("WorkingListSet", "WorkingListMember"):
@@ -406,16 +422,27 @@ class Database:
         try:
             self.validate(self.connection, allow_legacy=True)
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5, 6):
+            if version not in (1, 2, 3, 4, 5, 6, 7, 8):
                 raise FieldError("DatabaseFormat", "Database", detail="Database version changed during upgrade.")
             schema = ((DROPDOWN_SCHEMA if version == 1 else "")
                       + (HELP_SCHEMA if version < 3 else "")
                       + (ERROR_SCHEMA if version < 4 else "")
                       + (WORKING_LIST_SCHEMA if version < 5 else "")
                       + (BACK_SCHEMA if version < 6 else "") + BLOCK_SCHEMA)
+            if 5 <= version < 7:
+                self.connection.execute("ALTER TABLE WorkingListMember RENAME TO OldWorkingListMember")
+                self.connection.execute("ALTER TABLE WorkingListSet RENAME TO OldWorkingListSet")
+                schema += WORKING_LIST_SCHEMA
             for statement in schema.split(";"):
                 if statement.strip():
                     self.connection.execute(statement)
+            if 5 <= version < 7:
+                self.connection.execute("INSERT INTO WorkingListSet SELECT * FROM OldWorkingListSet")
+                self.connection.execute("INSERT INTO WorkingListMember SELECT * FROM OldWorkingListMember")
+                self.connection.execute("DROP TABLE OldWorkingListMember")
+                self.connection.execute("DROP TABLE OldWorkingListSet")
+            if 2 <= version < 8:
+                self._upgrade_dropdown_schema(version)
             if version == 1:
                 self._seed_dropdowns()
                 message = next(message for message in MESSAGES if message[0] == "Measurement")
@@ -432,6 +459,28 @@ class Database:
         except (sqlite3.Error, FieldError):
             self.connection.rollback()
             raise
+
+    def _upgrade_dropdown_schema(self, version):
+        self.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
+        self.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownPrevious")
+        for statement in DROPDOWN_SCHEMA.split(";"):
+            if statement.strip():
+                self.connection.execute(statement)
+        self.connection.execute(
+            "INSERT INTO Dropdown (ID, TableName, FieldName, ListItem, Def, Use) "
+            "SELECT ID, TableName, FieldName, ListItem, Def, Use FROM DropdownPrevious",
+        )
+        self.connection.execute("DROP TABLE DropdownPrevious")
+        if version >= 5:
+            for row in self.connection.execute(
+                    "SELECT ID, ScopeName FROM WorkingListSet WHERE ScreenName = 'DropDown'").fetchall():
+                field_name = row["ScopeName"]
+                if field_name not in DROPDOWN_FIELDS:
+                    raise FieldError("DatabaseFormat", "DropDown", detail="A saved dropdown selection has an invalid field.")
+                self.connection.execute(
+                    "UPDATE WorkingListSet SET ScopeName = ? WHERE ID = ?",
+                    (json.dumps(("FabricPiece", field_name), separators=(",", ":")), row["ID"]),
+                )
 
     def _seed_help(self):
         self.connection.executemany(
@@ -593,13 +642,36 @@ class Database:
         with self.connection:
             return self._dropdown_item(name, value)
 
-    def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None):
-        if name not in DROPDOWN_FIELDS:
+    def add_dropdown_choice(self, table_name, field_name, value):
+        if table_name == "FabricPiece" and field_name in DROPDOWN_FIELDS:
+            return self.add_dropdown_item(field_name, value)
+        if field_name not in DROPDOWN_SCOPE_FIELDS.get(table_name, ()):
+            raise FieldError("Choice", "FieldName")
+        clean = validate_fields((Field("ListItem", required=True),), {"ListItem": value})["ListItem"]
+        if clean.casefold() == ADD_ITEM.casefold():
+            raise FieldError("Choice", "ListItem")
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT ID, ListItem FROM Dropdown WHERE TableName = ? AND FieldName = ? "
+                "AND ListItem = ? COLLATE NOCASE", (table_name, field_name, clean),
+            ).fetchone()
+            if row is not None:
+                self.connection.execute("UPDATE Dropdown SET Use = 1 WHERE ID = ?", (row["ID"],))
+                return row["ListItem"]
+            self.connection.execute(
+                "INSERT INTO Dropdown (TableName, FieldName, ListItem) VALUES (?, ?, ?)",
+                (table_name, field_name, clean),
+            )
+        return clean
+
+    def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None, table_name="FabricPiece"):
+        if (table_name not in DROPDOWN_SCOPE_FIELDS
+                or name not in DROPDOWN_SCOPE_FIELDS[table_name]):
             raise FieldError("Choice", "FieldName")
         values = {field.name: "" for field in DROPDOWN_FILTER_FIELDS} if filters is None else filters
         clean = validate_fields(DROPDOWN_FILTER_FIELDS, values)
         order = self.load_sort("DropDownSort") if sort is None else normalize_sort(sort, DROPDOWN_COLUMNS)
-        clauses, args = ["FieldName = ?", "Use = 1"], [name]
+        clauses, args = ["TableName = ?", "FieldName = ?", "Use = 1"], [table_name, name]
         if clean["ListItem"]:
             clauses.append("instr(lower(ListItem), lower(?)) > 0")
             args.append(clean["ListItem"])
@@ -611,8 +683,7 @@ class Database:
             for field, direction in order
         )
         rows = [dict(row) for row in self.connection.execute(
-            "SELECT * FROM Dropdown WHERE TableName = 'FabricPiece' AND "
-            + " AND ".join(clauses) + f" ORDER BY {sql_order}", args,
+            "SELECT * FROM Dropdown WHERE " + " AND ".join(clauses) + f" ORDER BY {sql_order}", args,
         )]
         if selected_ids is not None:
             allowed = set(selected_ids)
@@ -637,13 +708,13 @@ class Database:
     def set_dropdown_default(self, item_id):
         with self.connection:
             row = self.connection.execute(
-                "SELECT FieldName FROM Dropdown WHERE ID = ? AND Use = 1", (item_id,),
+                "SELECT TableName, FieldName FROM Dropdown WHERE ID = ? AND Use = 1", (item_id,),
             ).fetchone()
             if row is None:
                 raise FieldError("MissingRecord", "DropdownID")
             self.connection.execute(
-                "UPDATE Dropdown SET Def = 0 WHERE TableName = 'FabricPiece' AND FieldName = ?",
-                (row["FieldName"],),
+                "UPDATE Dropdown SET Def = 0 WHERE TableName = ? AND FieldName = ?",
+                (row["TableName"], row["FieldName"]),
             )
             self.connection.execute("UPDATE Dropdown SET Def = 1 WHERE ID = ?", (item_id,))
 
@@ -1096,11 +1167,27 @@ class Database:
             )
         return back_id
 
-    def quilt_backs(self):
-        return [dict(row) for row in self.connection.execute(
+    def quilt_backs(self, filters=None, selected_ids=None, sort=None):
+        values = {field.name: "" for field in BACK_FILTER_FIELDS} if filters is None else filters
+        clean = validate_fields(BACK_FILTER_FIELDS, values)
+        order = self.load_sort("QuiltBackSort") if sort is None else normalize_sort(sort, BACK_COLUMNS)
+        clauses, args = [], []
+        if clean["BackName"]:
+            clauses.append("instr(lower(BackName), lower(?)) > 0")
+            args.append(clean["BackName"])
+        if clean["Status"]:
+            clauses.append("Status = ?")
+            args.append(clean["Status"])
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
+        rows = [dict(row) for row in self.connection.execute(
             "SELECT ID, BackName, BackWidth, BackLength, Status, DateModified "
-            "FROM QuiltBack ORDER BY DateModified DESC, ID DESC",
+            f"FROM QuiltBack{where} ORDER BY {sql_order}", args,
         )]
+        if selected_ids is not None:
+            allowed = set(selected_ids)
+            rows = [row for row in rows if row["ID"] in allowed]
+        return rows
 
     def get_quilt_back(self, back_id):
         row = self.connection.execute("SELECT * FROM QuiltBack WHERE ID = ?", (back_id,)).fetchone()
@@ -1273,9 +1360,16 @@ class Database:
         if screen not in WORKING_LIST_SCREENS:
             raise FieldError("Choice", "Screen")
         if screen == "DropDown":
-            if scope not in DROPDOWN_FIELDS:
+            if isinstance(scope, str):
+                table_name, field_name = "FabricPiece", scope
+            elif isinstance(scope, (tuple, list)) and len(scope) == 2:
+                table_name, field_name = scope
+            else:
                 raise FieldError("Choice", "FieldName")
-            return scope
+            if (table_name not in DROPDOWN_SCOPE_FIELDS
+                    or field_name not in DROPDOWN_SCOPE_FIELDS[table_name]):
+                raise FieldError("Choice", "FieldName")
+            return json.dumps((table_name, field_name), separators=(",", ":"))
         if screen == "History":
             try:
                 piece_id = int(scope)
@@ -1289,9 +1383,12 @@ class Database:
 
     def _working_list_rows(self, screen, scope):
         if screen == "DropDown":
-            return self.dropdown_rows(scope)
+            table_name, field_name = json.loads(scope)
+            return self.dropdown_rows(field_name, table_name=table_name)
         if screen == "History":
             return self.history(int(scope))
+        if screen == "Quilt Backs":
+            return self.quilt_backs()
         return self.help_rows()
 
     def save_set(self, name, ids, screen="Fabric", scope=None):

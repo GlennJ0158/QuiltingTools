@@ -9,7 +9,7 @@ import webbrowser
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from . import VERSION
 from .backs import (
@@ -17,14 +17,14 @@ from .backs import (
     palette_suggestion, ratio_label,
 )
 from .database import (
-    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, HELP_FILTER_FIELDS, HISTORY_FILTER_FIELDS,
-    HISTORY_COLUMNS, Database,
+    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
+    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database,
 )
 from .block_ui import BlockScreenMixin
 from .quilt_ui import QuiltScreenMixin
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
 from .helptext import (
-    BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
+    BACK_COLUMNS, BACK_FILTER_FIELDS, BACK_LAYOUT_COLUMNS, HELP_COLUMNS, HELP_FIELDS, NAVIGATION, SCREEN_FIELDS,
 )
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
@@ -83,7 +83,8 @@ def nonnegative_measurement(value, field):
 class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
-    def __init__(self, parent, fields, columns=2, style="TFrame", database=None):
+    def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
+                 memo_height=None, memo_width=None):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
@@ -99,8 +100,11 @@ class Form(ttk.Frame):
             owner.attach_help(label, field.name)
             variable = tk.StringVar(master=self, value=field.default)
             if field.kind == "memo":
-                widget = tk.Text(self, width=field.width, height=3 if field.name == "HoverText" else 6,
-                                 wrap="word", undo=True)
+                widget = tk.Text(
+                    self, width=memo_width or field.width,
+                    height=memo_height or (3 if field.name == "HoverText" else 6),
+                    wrap="word", undo=True,
+                )
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
             elif field.kind in ("choice", "dropdown"):
@@ -309,8 +313,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             ("Select Highlighted", self.select_highlighted),
             ("Filter", self.open_filter),
             ("Set Selection", self.open_sets),
-            ("Sort", self.open_sort),
             ("Reset Selection", self.reset_selection),
+            ("Sort", self.open_sort),
             ("Refresh", self.refresh_view),
         ):
             self.list_buttons.append(self.button(tools, label, action))
@@ -411,6 +415,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         elif name == "DropDown":
             self.refresh_dropdowns()
         elif name == "Quilt Backs":
+            self.refresh_back_stock()
             self.refresh_backs()
         elif name == "QuiltBlock":
             self.refresh_blocks()
@@ -596,7 +601,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def open_filter(self, screen=None, state=None, scope=None, refresh=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             fields = self.working_list_fields(screen)
             title = f"Filter {screen}"
@@ -690,17 +695,19 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.button(parent, "Filter", lambda: self.open_filter(screen, state, scope, refresh))
         self.button(parent, "Set Selection", lambda: self.open_sets(
             screen, state, scope, refresh, rows))
-        self.button(parent, "Sort", lambda: self.open_sort(screen, state, refresh))
         self.button(parent, "Reset Selection", lambda: self.reset_working_list(
             screen, state, refresh))
+        self.button(parent, "Sort", lambda: self.open_sort(screen, state, refresh))
 
     def working_list_state(self, screen, state=None):
         if state is not None:
             return state
         if screen == "DropDown":
-            return self.dropdown_states[self.dropdown_field()]
+            return self.dropdown_states[self.dropdown_key()]
         if screen == "HelpText":
             return self.help_state
+        if screen == "Quilt Backs":
+            return self.back_state
         raise FieldError("Choice", "Screen")
 
     def working_list_fields(self, screen):
@@ -708,6 +715,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             "DropDown": DROPDOWN_FILTER_FIELDS,
             "HelpText": HELP_FILTER_FIELDS,
             "History": HISTORY_FILTER_FIELDS,
+            "Quilt Backs": BACK_FILTER_FIELDS,
         }[screen]
 
     def working_list_sort(self, screen, state):
@@ -716,6 +724,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 "DropDown": self.db.load_sort("DropDownSort"),
                 "HelpText": self.db.load_sort("HelpTextSort"),
                 "History": self.db.load_sort("HistorySort"),
+                "Quilt Backs": self.db.load_sort("QuiltBackSort"),
             }[screen]
         return state["sort"]
 
@@ -728,7 +737,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def select_working_list(self, screen, state=None, scope=None, refresh=None):
         state = self.working_list_state(screen, state)
-        listing = {"DropDown": self.dropdown_list, "HelpText": self.help_list}.get(screen)
+        listing = {"DropDown": self.dropdown_list, "HelpText": self.help_list,
+                   "Quilt Backs": self.back_list}.get(screen)
         if screen == "History" and refresh is None:
             raise FieldError("Choice", "Screen")
         selected = listing.tree.selection() if listing is not None else state["tree"].selection()
@@ -751,54 +761,99 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
     def build_dropdowns(self):
         window = self.dropdown_page
         ttk.Label(window, text="DropDown", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.dropdown_names = {caption(name): name for name in DROPDOWN_FIELDS}
+        self.dropdown_owner_fields = DROPDOWN_SCOPE_FIELDS
+        all_fields = tuple(dict.fromkeys(
+            name for names in self.dropdown_owner_fields.values() for name in names
+        ))
         fields = (
-            Field("FieldName", "choice", choices=tuple(self.dropdown_names),
-                  default=next(iter(self.dropdown_names))),
+            Field("TableName", "choice", choices=tuple(self.dropdown_owner_fields), default="FabricPiece"),
+            Field("FieldName", "choice", choices=all_fields, default="FabricName"),
             Field("ListItem"),
         )
-        self.dropdown_form = Form(window, fields)
+        ttk.Label(window, text="Choose a database table or screen, then a field or button. "
+                  "FabricPiece choices continue to populate fabric forms.", wraplength=900, padding=8).pack(anchor="w")
+        entry = ttk.Frame(window, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.dropdown_form = Form(entry, fields, columns=3, style="Entry.TFrame")
         self.dropdown_form.pack(fill="x")
-        ttk.Label(window, text="Select a row and use Set Default. Blank is a valid default for an empty "
-                  "add form. Defined grain, print and status choices cannot be extended.",
-                  wraplength=720, padding=8).pack(anchor="w")
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
+        actions.pack(fill="x")
+        self.button(actions, "Add Item", self.add_dropdown)
+        self.button(actions, "Set Default", self.set_dropdown_default)
         tools = ttk.Frame(window, padding=(8, 0))
         tools.pack(fill="x")
         self.add_working_list_tools(tools, "DropDown")
-        actions = ttk.Frame(window, padding=8)
-        actions.pack(fill="x")
-        self.dropdown_list = RecordList(window, ("ID", "FieldName", "ListItem", "Def", "Use"))
+        self.dropdown_list = RecordList(window, DROPDOWN_COLUMNS)
+        tree = self.dropdown_list.tree
+        char_width = tkfont.nametofont("TkDefaultFont").measure("0" * 5) + 10
+        for name, width in (
+            ("TableName", 150), ("FieldName", 160), ("ListItem", 220),
+            ("Def", char_width), ("Use", char_width),
+        ):
+            tree.column(name, width=width, minwidth=width, stretch=False)
+        for name in DROPDOWN_COLUMNS:
+            tree.column(name, stretch=False)
         self.dropdown_list.pack(fill="both", expand=True)
-        self.button(actions, "Add Item", self.add_dropdown)
-        self.button(actions, "Set Default", self.set_dropdown_default)
         self.dropdown_states = {
-            name: self.new_list_state(self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS)
-            for name in self.dropdown_names.values()
+            (table_name, field_name): self.new_list_state(
+                self.db.load_sort("DropDownSort"), DROPDOWN_FILTER_FIELDS,
+            )
+            for table_name, names in self.dropdown_owner_fields.items()
+            for field_name in names
         }
+        self.dropdown_form.widgets["TableName"].bind(
+            "<<ComboboxSelected>>", self.command(self.dropdown_table_changed))
         self.dropdown_form.widgets["FieldName"].bind(
             "<<ComboboxSelected>>", self.command(self.refresh_dropdowns))
         self.dropdown_initial = self.dropdown_form.values()
-        self.refresh_dropdowns()
+        self.dropdown_table_changed()
+
+    def dropdown_table(self):
+        table_name = self.dropdown_form.variables["TableName"].get()
+        if table_name not in self.dropdown_owner_fields:
+            raise FieldError("Choice", "TableName")
+        return table_name
 
     def dropdown_field(self):
-        values = validate_fields(self.dropdown_form.fields, self.dropdown_form.values())
-        return self.dropdown_names[values["FieldName"]]
+        field_name = self.dropdown_form.variables["FieldName"].get()
+        if field_name not in self.dropdown_owner_fields[self.dropdown_table()]:
+            raise FieldError("Choice", "FieldName")
+        return field_name
+
+    def dropdown_key(self):
+        return self.dropdown_table(), self.dropdown_field()
+
+    def dropdown_table_changed(self):
+        table_name = self.dropdown_table()
+        fields = self.dropdown_owner_fields[table_name]
+        field_name = self.dropdown_form.variables["FieldName"].get()
+        self.dropdown_form.widgets["FieldName"].configure(values=fields)
+        if field_name not in fields:
+            field_name = fields[0]
+            self.dropdown_form.variables["FieldName"].set(field_name)
+        self.dropdown_initial["TableName"] = table_name
+        self.dropdown_initial["FieldName"] = field_name
+        self.refresh_dropdowns()
 
     def refresh_dropdowns(self):
-        name = self.dropdown_field()
-        state = self.dropdown_states[name]
+        table_name, field_name = self.dropdown_key()
+        state = self.dropdown_states[table_name, field_name]
         order = self.working_list_sort("DropDown", state)
-        rows = self.db.dropdown_rows(name, state["filters"], state["selected_ids"], order)
-        for row in rows:
-            row["FieldName"] = caption(row["FieldName"])
+        rows = self.db.dropdown_rows(
+            field_name, state["filters"], state["selected_ids"], order, table_name,
+        )
         context = self.list_context(state)
         self.dropdown_list.fill(
             rows, "dropdown records", order, context)
         self.form.refresh_choices()
+        self.dropdown_initial["TableName"] = table_name
         self.dropdown_initial["FieldName"] = self.dropdown_form.values()["FieldName"]
 
     def add_dropdown(self):
-        self.db.add_dropdown_item(self.dropdown_field(), self.dropdown_form.values()["ListItem"])
+        table_name, field_name = self.dropdown_key()
+        self.db.add_dropdown_choice(
+            table_name, field_name, self.dropdown_form.variables["ListItem"].get(),
+        )
         self.dropdown_form.variables["ListItem"].set("")
         self.dropdown_initial = self.dropdown_form.values()
         self.refresh_dropdowns()
@@ -812,20 +867,22 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def build_helptext(self):
         ttk.Label(self.help_page, text="HelpText", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        self.help_form = Form(self.help_page, HELP_FIELDS, columns=1)
+        entry = ttk.Frame(self.help_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.help_form = Form(entry, HELP_FIELDS, columns=1, style="Entry.TFrame")
         self.help_form.pack(fill="x")
         for name in ("TableName", "FieldName"):
             self.help_form.widgets[name].configure(state="readonly")
         self.help_state = self.new_list_state(
             self.db.load_sort("HelpTextSort"), HELP_FILTER_FIELDS,
         )
-        tools = ttk.Frame(self.help_page, padding=(8, 0))
-        tools.pack(fill="x")
-        self.add_working_list_tools(tools, "HelpText")
-        actions = ttk.Frame(self.help_page, padding=8)
+        actions = ttk.Frame(entry, padding=8, style="Entry.TFrame")
         actions.pack(fill="x")
         self.help_update = self.button(actions, "Update", self.update_help)
         self.button(actions, "Clear", lambda: self.clear_help() if self.allow_navigation() else None)
+        tools = ttk.Frame(self.help_page, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(tools, "HelpText")
         self.help_list = RecordList(self.help_page, HELP_COLUMNS)
         self.help_list.pack(fill="both", expand=True)
         self.help_list.tree.configure(selectmode="browse")
@@ -902,7 +959,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         ttk.Label(self.error_page, text="Reference edits do not change runtime error dialogs. "
                   "Numbered fixes correspond to numbered likely causes; braces mark variable details.",
                   wraplength=1100).pack(anchor="w")
-        self.error_form = Form(self.error_page, ERROR_FIELDS, columns=1, style="Entry.TFrame")
+        self.error_form = Form(
+            self.error_page, ERROR_FIELDS, columns=3, style="Entry.TFrame", memo_height=1, memo_width=28,
+        )
         self.error_form.pack(fill="x")
         self.error_details = ttk.Label(self.error_page, padding=4)
         self.error_details.pack(anchor="w")
@@ -916,8 +975,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         tools.pack(fill="x")
         for label, action in (
             ("Select Highlighted", self.select_errors), ("Filter", self.open_filter),
-            ("Set", self.open_sets), ("Sort", self.open_sort),
-            ("Reset Selection", self.reset_errors), ("Refresh", self.refresh_error_view),
+            ("Set Selection", self.open_sets), ("Reset Selection", self.reset_errors),
+            ("Sort", self.open_sort), ("Refresh", self.refresh_error_view),
             ("Print", self.print_errors),
         ):
             self.button(tools, label, action)
@@ -936,14 +995,14 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                  "one seam allowance applies to every join. Drafts do not change inventory.",
             wraplength=1100,
         ).pack(anchor="w")
-        self.back_form = Form(
-            self.backs_page, SCREEN_FIELDS["Quilt Backs"], columns=5,
-        )
+        entry = ttk.Frame(self.backs_page, style="Entry.TFrame")
+        entry.pack(fill="x")
+        self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
         self.back_form.pack(fill="x")
         self.back_initial = self.back_form.values()
-        stock_actions = ttk.Frame(self.backs_page, padding=(8, 0))
+        stock_actions = ttk.Frame(entry, padding=(8, 0), style="Entry.TFrame")
         stock_actions.pack(fill="x")
-        ttk.Label(stock_actions, text="Available source rectangles").pack(side="left", padx=(0, 10))
+        ttk.Label(stock_actions, text="Available source rectangles", style="Entry.TLabel").pack(side="left", padx=(0, 10))
         self.button(stock_actions, "Set Sketch Color", self.set_back_palette)
         self.button(stock_actions, "Refresh Fabric", self.refresh_back_stock)
         self.back_stock = RecordList(self.backs_page, LIST_COLUMNS)
@@ -964,9 +1023,15 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             "<<TreeviewSelect>>", self.command(self.on_back_candidate_select),
         )
         ttk.Label(self.backs_page, text="Saved plans").pack(anchor="w", padx=8)
-        self.back_list = RecordList(
-            self.backs_page, ("ID", "BackName", "BackWidth", "BackLength", "Status", "DateModified"),
+        self.back_state = self.new_list_state(self.db.load_sort("QuiltBackSort"), BACK_FILTER_FIELDS)
+        tools = ttk.Frame(self.backs_page, padding=(8, 0))
+        tools.pack(fill="x")
+        self.add_working_list_tools(
+            tools, "Quilt Backs", refresh=self.refresh_backs,
+            rows=lambda: self.db.quilt_backs(
+                self.back_state["filters"], self.back_state["selected_ids"], self.back_state["sort"]),
         )
+        self.back_list = RecordList(self.backs_page, BACK_COLUMNS)
         self.back_list.tree.configure(height=3)
         self.back_list.pack(fill="both", expand=True)
         self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
@@ -981,6 +1046,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_selected_id = None
         self.back_palette = {}
         self.back_initial = self.back_form.values()
+        self.refresh_back_stock()
         self.refresh_backs()
         self.back_confirm_button.state(["disabled"])
         self.back_assembled_button.state(["disabled"])
@@ -992,13 +1058,16 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_stock.fill(rows, "available fabric rectangles", self.sort)
 
     def refresh_backs(self, prefer_id=None):
-        self.refresh_back_stock()
-        rows = self.db.quilt_backs()
-        self.back_list.fill(rows, "saved quilt backs", (("DateModified", "desc"), ("ID", "desc")))
-        if prefer_id is not None and self.back_list.tree.exists(str(prefer_id)):
-            self.back_list.tree.selection_set(str(prefer_id))
-            self.back_list.tree.see(str(prefer_id))
-            self.on_back_select()
+        selected = self.back_list.tree.selection()
+        keep = (str(prefer_id),) if prefer_id is not None else selected
+        state = self.back_state
+        rows = self.db.quilt_backs(state["filters"], state["selected_ids"], state["sort"])
+        self.back_list.fill(rows, "saved quilt backs", state["sort"], self.list_context(state))
+        kept = tuple(item for item in keep if self.back_list.tree.exists(item))
+        if kept:
+            self.back_list.tree.selection_set(kept)
+            self.back_list.tree.see(kept[0])
+        self.on_back_select()
 
     def generate_back_plans(self):
         selected = self.back_stock.tree.selection()
@@ -1138,8 +1207,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def on_back_select(self):
         selected = self.back_list.tree.selection()
+        was_saved = self.back_selected_id is not None
         self.back_selected_id = int(selected[0]) if len(selected) == 1 else None
         if self.back_selected_id is None:
+            if was_saved:
+                self.back_selected_layout = None
             self.back_confirm_button.state(["disabled"])
             self.back_assembled_button.state(["disabled"])
             return
@@ -1205,6 +1277,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             remnants[source_id] = None if not width and not length else (width, length)
         back = self.db.confirm_back_cut(self.back_selected_id, remnants)
         window.destroy()
+        self.refresh_back_stock()
         self.refresh_backs(back["ID"])
         self.back_status.configure(
             text=f"Back {back['ID']} cuts recorded. Sources were retired; entered remnants were added."
@@ -1403,15 +1476,16 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def open_sort(self, screen=None, state=None, refresh=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             columns = {
                 "DropDown": DROPDOWN_COLUMNS,
                 "HelpText": HELP_COLUMNS,
                 "History": HISTORY_COLUMNS,
+                "Quilt Backs": BACK_COLUMNS,
             }[screen]
             sort_key = {"DropDown": "DropDownSort", "HelpText": "HelpTextSort",
-                        "History": "HistorySort"}[screen]
+                        "History": "HistorySort", "Quilt Backs": "QuiltBackSort"}[screen]
             order = self.working_list_sort(screen, state)
             title = f"Sort {screen}"
             window = self.dialog(title, f"{screen} Sort")
@@ -1491,18 +1565,24 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def open_sets(self, screen=None, state=None, scope=None, refresh=None, rows=None):
         screen = screen or self.current
-        if screen in ("DropDown", "HelpText", "History"):
+        if screen in ("DropDown", "HelpText", "History", "Quilt Backs"):
             state = self.working_list_state(screen, state)
             refresh = refresh or {"DropDown": self.refresh_dropdowns,
                                   "HelpText": self.refresh_help}.get(screen)
             if screen == "DropDown":
-                scope = scope or self.dropdown_field()
+                scope = scope or self.dropdown_key()
                 list_rows = rows or (lambda: self.db.dropdown_rows(
-                    scope, state["filters"], state["selected_ids"], state["sort"],
+                    scope[1], state["filters"], state["selected_ids"], state["sort"],
+                    scope[0],
                 ))
             elif screen == "HelpText":
                 scope = None
                 list_rows = rows or (lambda: self.db.help_rows(
+                    state["filters"], state["selected_ids"], state["sort"],
+                ))
+            elif screen == "Quilt Backs":
+                scope = None
+                list_rows = rows or (lambda: self.db.quilt_backs(
                     state["filters"], state["selected_ids"], state["sort"],
                 ))
             else:

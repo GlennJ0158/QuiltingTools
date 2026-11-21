@@ -135,3 +135,17 @@ class BlockTests(unittest.TestCase):
         with sqlite3.connect(self.db.upgrade_backup) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 6)
         self.assertEqual(self.db.blocks(), [])
+
+    def test_upgrade_v8_preserves_generalized_dropdown_sets(self):
+        self.db.add_dropdown_choice("HelpText", "Update", "Apply")
+        row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
+        set_id = self.db.save_set("Help actions", [row["ID"]], "DropDown", ("HelpText", "Update"))
+        with self.db.connection:
+            for name in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+                         "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
+                self.db.connection.execute(f"DROP TABLE {name}")
+            self.db.connection.execute("PRAGMA user_version=8")
+        self.db.close()
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.set_members(set_id, "DropDown", ("HelpText", "Update")), [row["ID"]])
+        self.assertEqual(self.db.blocks(), [])
