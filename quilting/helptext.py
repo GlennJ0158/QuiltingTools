@@ -44,7 +44,8 @@ SCREEN_HELP = {
               "versions and their quantities. Map each part color to one or more inventory color "
               "values, then choose Plan Quilt. Plans pack conservative cut bounding rectangles, "
               "can report shortages and do not reserve or change inventory. Existing plans are "
-              "snapshots; regenerate after changes. Print Quilt Plan prints the saved plan."),
+              "snapshots; regenerate after changes. Choose Entire Quilt or By Block, then "
+              "Print Quilt Plan to print the saved plan."),
     "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
                    "instance's position and orientation in Sketch, then approve a fully covered, "
                    "non-overlapping layout. Approved blocks are immutable; New Version copies one "
@@ -252,6 +253,8 @@ FIELD_HELP = {
     "Quantity": ("Enter the number of blocks.", "Enter an integer from 1 through 10,000."),
     "InventoryColor": ("Select a fabric inventory color.", "Map each part color to one or more inventory colors."),
     "SavedQuiltPlan": ("Choose a saved cutting plan.", "Saved plans are snapshots and do not reserve fabric."),
+    "QuiltReportFormat": ("Choose the cutting list format.", "Entire Quilt combines equivalent parts; "
+                          "By Block groups them by block type. Both include source allocations and shortages."),
     "QuiltPlanDetails": ("Review the cutting plan.", "Shows source IDs, allocations, cutting bounds and shortages."),
     **{field.name: (f"Enter {field.label.lower()}.", f"Enter the {field.label.lower()} for this block or part.")
        for field in (*BLOCK_FIELDS, *PART_FIELDS)},
@@ -339,7 +342,8 @@ BUTTON_HELP = {
     "Remove Mapping": ("Remove the chosen color mapping.", "Removing a mapping does not change inventory."),
     "Plan Quilt": ("Generate a cutting plan.", "Allocate part cut bounds to matching available fabric; "
                    "the saved plan reports unfilled demand and does not change inventory."),
-    "Print Quilt Plan": ("Print the selected cutting plan.", "Save an HTML report at a new path and print in a browser."),
+    "Print Quilt Plan": ("Print the selected cutting plan.", "Choose a cutting list format, then save an HTML "
+                         "report at a new path and print in a browser."),
     "QuiltBlock": ("Open block design.", "Maintain and approve reusable block definitions."),
     "New Version": ("Copy the block to a draft version.", "The source version remains unchanged."),
     "Parts": ("Open part maintenance.", "Add, update or delete part definitions on a draft."),
@@ -429,7 +433,8 @@ BUTTON_HELP = {
 
 SCREEN_FIELDS = {
     "Quilt": (Field("QuiltName"), Field("SavedQuilt"), Field("ApprovedBlock"), Field("Quantity"),
-              Field("PartColor"), Field("InventoryColor"), Field("SavedQuiltPlan"), Field("QuiltPlanDetails")),
+              Field("PartColor"), Field("InventoryColor"), Field("SavedQuiltPlan"), Field("QuiltReportFormat"),
+              Field("QuiltPlanDetails")),
     "QuiltBlock": BLOCK_FIELDS,
     "Block Parts": PART_FIELDS,
     "Block Sketch": (Field("BlockSketch"), Field("Placement"), Field("PositionX"), Field("PositionY"),

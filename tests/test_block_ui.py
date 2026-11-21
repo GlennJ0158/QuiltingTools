@@ -122,6 +122,18 @@ class BlockUITests(unittest.TestCase):
         report = path.read_text()
         self.assertIn("<polygon", report)
         self.assertIn("part instance 1", report)
+        self.assertIn("Cutting list: Entire Quilt", report)
+        self.assertIn("4 Red Rectangle", report)
+        self.app.quilt_report_format.set("By Block")
+        path_by_block = Path(self.temp.name) / "quilt-by-block.html"
+        with patch("quilting.quilt_ui.filedialog.asksaveasfilename", return_value=str(path_by_block)), \
+                patch("quilting.quilt_ui.webbrowser.open", return_value=True):
+            self.click(self.app.quilt_page, "Print Quilt Plan")
+        report = path_by_block.read_text()
+        self.assertIn("Cutting list: By Block", report)
+        self.assertIn("quantity 2", report)
+        self.assertIn("Panel (part ID", report)
+        self.assertIn("<polygon", report)
         self.assertEqual(self.db.get_piece(source_id), before)
         form.variables["Quantity"].set("3")
         self.click(self.app.quilt_page, "Plan Quilt")

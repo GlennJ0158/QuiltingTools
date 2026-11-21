@@ -237,6 +237,10 @@ It is possible another layout could fit where this search reports shortages.
 
 Plans retain their quilt composition, color mapping and fabric revision snapshots.
 They can be reopened and printed as an HTML cutting report with source diagrams.
+Choose **Entire Quilt** to combine equivalent parts across blocks, or **By Block**
+to group parts by block type and quantity. Both show required counts, source
+fabric allocations and shortages, finished dimensions and cut bounding sizes;
+the detailed source allocations and diagrams remain in the report.
 Diagrams and cutting outlines are visual guides, not actual-size templates.
 Plans are **informational only**: they neither reserve nor consume fabric. Save
 quantity/mapping changes before planning, and regenerate after inventory changes.

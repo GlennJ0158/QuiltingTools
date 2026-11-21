@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .blocks import COLORS
 from .model import Field, FieldError, display_measurement
+from .quilt_report import cutting_list_description
 
 
 class QuiltScreenMixin:
@@ -46,6 +47,12 @@ class QuiltScreenMixin:
         self.quilt_plan_choice.pack(side="left", padx=8)
         self.attach_help(self.quilt_plan_choice, "SavedQuiltPlan")
         self.quilt_plan_choice.bind("<<ComboboxSelected>>", self.command(self.open_quilt_plan))
+        ttk.Label(report_bar, text="Print format").pack(side="left")
+        self.quilt_report_format = ttk.Combobox(report_bar, state="readonly", width=14,
+                                                values=("Entire Quilt", "By Block"))
+        self.quilt_report_format.set("Entire Quilt")
+        self.quilt_report_format.pack(side="left", padx=8)
+        self.attach_help(self.quilt_report_format, "QuiltReportFormat")
         from tkinter import Text
         self.quilt_text = Text(self.quilt_page, wrap="word", state="disabled", height=12)
         self.quilt_text.pack(fill="both", expand=True)
@@ -258,7 +265,8 @@ class QuiltScreenMixin:
         report = ('<!doctype html><html><head><meta charset="utf-8"><title>Quilt plan</title>'
                   '<style>pre{white-space:pre-wrap}@media print{button{display:none}}</style></head>'
                   '<body><button onclick="window.print()">Print</button>'
-                  f'<pre>{escape(self.quilt_plan_description(plan))}</pre>'
+                  f'<pre>{escape(cutting_list_description(plan, self.quilt_report_format.get()))}</pre>'
+                  f'<h2>Detailed source allocations</h2><pre>{escape(self.quilt_plan_description(plan))}</pre>'
                   + "".join(diagrams) +
                   '<script>window.addEventListener("load",()=>window.print());</script></body></html>')
         path = Path(destination).resolve()
