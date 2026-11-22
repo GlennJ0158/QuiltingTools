@@ -221,13 +221,21 @@ comparison and select one block to edit its placements.
 
 **Approve** checks all instances, overlaps, gaps and overflow against the block
 rectangle before making the version immutable. The geometry check allows an area
-tolerance of one billionth of an inch times the block perimeter (at least
-0.0000000001 square inches) for numeric rounding; curves are approximations.
+tolerance for triangle-side rounding equivalent to one-half microinch of unscaled
+geometry per block perimeter (at least 0.0000000001 square inches); curves are
+approximations.
 **New Version** copies a block and all placements into a separate draft, preserving
 the original. Block selections and sort order are independent of Fabric. Deleting
 a draft removes its parts and set memberships; approved versions are not deleted.
 
 Block design never reserves or changes fabric inventory.
+
+**Create from Template** adds an editable draft using the finished width and
+length currently entered on the QuiltBlock form, along with its scale and seam
+allowance. Starter layouts include Four Patch, Nine Patch, Flying Geese, Log
+Cabin, and Half-Square Triangle. The generated parts and placements can be
+edited before approval; colors are visual defaults. Wedding Ring is not included
+because its curved arc pieces are not represented by the current geometry model.
 
 ### Quilt composition and cutting plans
 

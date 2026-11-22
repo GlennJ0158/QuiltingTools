@@ -130,7 +130,8 @@ def validate_layout(block, parts, placements):
     lookup = {part["ID"]: part for part in parts}
     geometries = [placed_shape(lookup[p["BlockPartID"]], p, scale) for p in placements]
     union = unary_union(geometries)
-    tolerance = max(1e-10, target.length * 1e-9)
+    # Triangle-side rounding is in unscaled inches, so scale its area tolerance too.
+    tolerance = max(1e-10, target.length * 5e-7 * scale)
     issues = []
     if sum(g.area for g in geometries) - union.area > tolerance:
         issues.append("Parts overlap.")

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .backs import MAX_PANELS, MINIMUM_PART, PALETTE
 from .blocks import BLOCK_COLUMNS, BLOCK_FILTER_FIELDS, parse_block, parse_part, validate_layout
+from .block_templates import BLOCK_TEMPLATES, build_block_template
 from .quilt_planner import plan_quilt
 from .helptext import (
     BACK_COLUMNS, BACK_FILTER_FIELDS, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS,
@@ -1120,6 +1121,48 @@ class Database:
                 "Scale, SeamAllowance, Status, DateCreated, DateModified) "
                 "VALUES (?, ?, ?, ?, ?, ?, 'Draft', ?, ?)", (*clean.values(), timestamp, timestamp))
         return cursor.lastrowid
+
+    def create_block_template(self, name, values):
+        if name not in BLOCK_TEMPLATES:
+            raise FieldError("Choice", "QuiltBlock")
+        block_values = dict(values)
+        block_values["BlockName"] = name
+        block_values["Description"] = BLOCK_TEMPLATES[name]
+        clean_block = parse_block(block_values)
+        specs = build_block_template(name, clean_block["FinishedWidth"], clean_block["FinishedLength"])
+        choices = {
+            field: self.dropdown_items("Block Parts", field)
+            for field in ("Shape", "PartColor")
+        }
+        timestamp = now()
+        with self._write_transaction():
+            cursor = self.connection.execute(
+                "INSERT INTO QuiltBlock (BlockName, Description, FinishedWidth, FinishedLength, "
+                "Scale, SeamAllowance, Status, DateCreated, DateModified) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'Draft', ?, ?)",
+                (*clean_block.values(), timestamp, timestamp))
+            block_id = cursor.lastrowid
+            for spec in specs:
+                part = parse_part(spec["values"], choices)
+                part_cursor = self.connection.execute(
+                    "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (block_id, *(part[field] for field in (
+                        "PartName", "Shape", "PartColor", "NumberInBlock", "PartWidth", "PartLength",
+                        "SideA", "SideB", "SideC", "Diameter"))))
+                part_id = part_cursor.lastrowid
+                self.connection.executemany(
+                    "INSERT INTO BlockPartPlacement "
+                    "(BlockPartID, Instance, X, Y, Rotation, Mirrored) VALUES (?, ?, ?, ?, ?, ?)",
+                    ((part_id, instance, x, y, rotation, int(mirrored))
+                     for instance, (x, y, rotation, mirrored) in enumerate(spec["placements"], 1)))
+            issues = validate_layout(
+                self.get_block(block_id), self.block_parts(block_id), self.block_placements(block_id),
+            )
+            if issues:
+                raise FieldError("Database", "QuiltBlock", detail=" ".join(issues))
+        return block_id
 
     def update_block(self, block_id, revision, values):
         clean = parse_block(values)
