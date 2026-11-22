@@ -56,13 +56,16 @@ SCREEN_HELP = {
     "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
                    "instance's position and orientation in Sketch, then approve a fully covered, "
                    "non-overlapping layout. Approved blocks are immutable; New Version copies one "
-                   "to an independent draft. Scale changes finished dimensions, not seam allowance."),
+                   "to an independent draft. Highlight multiple blocks and choose Sketch to compare "
+                   "their saved layouts. Scale changes finished dimensions, not seam allowance."),
     "Block Parts": ("Maintain a block's part definitions.", "Choose one supported shape and enter its "
                     "finished dimensions, color and number per block. Triangle a is the horizontal base; "
                     "b and c meet its left and right ends. Circles and semicircles use diameter."),
     "Block Sketch": ("Arrange each part instance.", "Choose a part instance, enter its unscaled base "
                      "position, rotation and mirror setting, then Save Placement. The displayed sketch "
                      "uses the block scale. Approval requires no overlap, gaps or out-of-bounds areas."),
+    "Compare Block Sketches": ("Compare selected block layouts.", "Each sketch shows the saved layout "
+                               "and its validation status. Close this view and select one block to edit it."),
     "QuiltBlock Filter": ("Filter the block list.", "Match literal name text and optional status."),
     "QuiltBlock Sort": ("Sort the block list.", "Choose distinct columns and ascending or descending order."),
     "QuiltBlock Set": ("Save or apply a block selection.", "Named sets contain listed block IDs; "
@@ -374,7 +377,8 @@ BUTTON_HELP = {
     "QuiltBlock": ("Open block design.", "Maintain and approve reusable block definitions."),
     "New Version": ("Copy the block to a draft version.", "The source version remains unchanged."),
     "Parts": ("Open part maintenance.", "Add, update or delete part definitions on a draft."),
-    "Sketch": ("Open the editable sketch.", "Position and orient each part instance."),
+    "Sketch": ("Open or compare sketches.", "Select one block to edit placements, or highlight multiple "
+               "blocks to compare their saved layouts."),
     "Approve": ("Approve a complete layout.", "Approval requires all instances and no gaps, overlap or overflow."),
     "Save Placement": ("Save the selected placement.", "Persist the part instance position and orientation."),
     "Print Sketch": ("Print this block sketch.", "Save an HTML report at a new filename; "
@@ -468,6 +472,7 @@ SCREEN_FIELDS = {
     "Block Parts": PART_FIELDS,
     "Block Sketch": (Field("BlockSketch"), Field("Placement"), Field("PositionX"), Field("PositionY"),
                      Field("Rotation"), Field("Mirror")),
+    "Compare Block Sketches": (Field("BlockSketch"),),
     "QuiltBlock Filter": BLOCK_FILTER_FIELDS,
     "QuiltBlock Sort": tuple(field for index in range(1, len(BLOCK_COLUMNS) + 1) for field in (
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
@@ -532,6 +537,7 @@ SCREEN_BUTTONS = {
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Block Parts": ("Add", "Update", "Delete", "Clear", "Close"),
     "Block Sketch": ("Save Placement", "Print Sketch", "Close"),
+    "Compare Block Sketches": ("Close",),
     "QuiltBlock Filter": ("Apply", "Clear Fields", "Cancel"),
     "QuiltBlock Sort": ("Apply", "Clear Fields", "Cancel"),
     "QuiltBlock Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),

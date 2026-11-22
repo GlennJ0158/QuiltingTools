@@ -95,6 +95,38 @@ class BlockUITests(unittest.TestCase):
         self.assertIn("Parts overlap", report)
         self.errors.assert_not_called()
 
+    def test_compare_selected_sketches_without_editing_blocks(self):
+        ids = [self.db.add_block(block(BlockName=name)) for name in ("Alpha", "Beta", "Gamma", "Delta")]
+        self.db.save_block_part(ids[0], 1, part(PartColor="Red"))
+        self.db.save_block_part(ids[1], 1, part(PartColor="Blue"))
+        before = [dict(self.db.get_block(block_id)) for block_id in ids]
+        self.app.refresh_blocks()
+        self.app.block_list.tree.selection_set(tuple(map(str, ids)))
+        self.root.update()
+        self.click(self.app.block_page, "Sketch")
+        window = self.app.dialogs[-1]
+        self.assertEqual(window.title(), "Compare Block Sketches")
+        cards = [widget for widget in descendants(window) if isinstance(widget, ttk.LabelFrame)]
+        self.assertEqual(len(cards), 4)
+        self.assertTrue(all(any(f"ID {block_id}" in card.cget("text") for card in cards)
+                            for block_id in ids))
+        sketches = [next(widget for widget in descendants(card) if isinstance(widget, tk.Canvas))
+                    for card in cards]
+        self.assertTrue(any(sketches[0].itemcget(item, "fill") == "red"
+                            for item in sketches[0].find_withtag("all")))
+        self.assertTrue(any(sketches[1].itemcget(item, "fill") == "blue"
+                            for item in sketches[1].find_withtag("all")))
+        self.assertTrue(any("Parts overlap" in widget.cget("text") for widget in descendants(cards[0])
+                            if isinstance(widget, ttk.Label)))
+        scroll = next(widget for widget in descendants(window)
+                      if isinstance(widget, tk.Canvas) and widget not in sketches)
+        self.assertGreater(scroll.bbox("all")[3], sketches[0].winfo_height())
+        self.assertFalse(any(isinstance(widget, Form) for widget in descendants(window)))
+        self.click(window, "Close")
+        self.assertEqual([dict(self.db.get_block(block_id)) for block_id in ids], before)
+        self.assertEqual(set(self.app.block_list.tree.selection()), set(map(str, ids)))
+        self.errors.assert_not_called()
+
     def test_quilt_workflow_saves_allocations_and_prints_without_consuming_inventory(self):
         block_id = self.db.add_block(block())
         self.db.save_block_part(block_id, 1, part())
