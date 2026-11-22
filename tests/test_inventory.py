@@ -172,6 +172,17 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.db.pieces(selected_ids=[]), [])
         self.assertEqual([row["ID"] for row in self.db.pieces(selected_ids=[ids[1]])], [ids[1]])
 
+    def test_size_filter_includes_both_endpoints(self):
+        sizes = (("9", "20"), ("10", "20"), ("15", "25"),
+                 ("20", "30"), ("20", "31"), ("21", "30"))
+        ids = [self.db.save_piece(fabric(UsableWidth=width, UsableLength=length))
+               for width, length in sizes]
+        filters = {field.name: "" for field in FILTER_FIELDS}
+        filters.update(MinimumWidth="10", MaximumWidth="20", MinimumLength="20", MaximumLength="30")
+        self.assertEqual({row["ID"] for row in self.db.pieces(filters)}, set(ids[1:4]))
+        filters.update(MinimumWidth="20", MaximumWidth="10")
+        self.assertEqual(self.db.pieces(filters), [])
+
     def test_selection_snapshot_and_sort_persistence(self):
         first = self.db.save_piece(fabric())
         set_id = self.db.save_set("Project blues", [first, first])
@@ -417,6 +428,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE DropdownCurrent")
             self.db.connection.execute("CREATE UNIQUE INDEX DropdownDefaultIndex "
                                        "ON Dropdown(TableName, FieldName) WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("PRAGMA user_version = 9")
         self.db.close()
         with self.assertRaises(UpgradeRequired):

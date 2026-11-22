@@ -19,10 +19,11 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 11 prompt for a backed-up
+automatically. Databases with schema versions 1 through 12 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
 working-list selections, Quilt Backs planning, generalized dropdown keys and
-QuiltBlock/Quilt design, protected list metadata, and nullable optional fabric fields;
+QuiltBlock/Quilt design, protected list metadata, nullable optional fabric fields,
+and separate quilt-back margins;
 declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
@@ -151,8 +152,10 @@ Metric entry/conversion is not yet implemented.
 
 ### Quilt backs
 
-Open **Quilt Backs** to enter a name, quilt width/length, one equal overhang margin
-for all four sides, and one seam allowance used at every seam. The available
+Open **Quilt Backs** to enter a name, quilt width/length, separate top/bottom and
+side overhang margins, and one seam allowance used at every seam. Margins over
+10 inches produce a warning but are accepted. Existing plans retain their former
+equal margins when the database is upgraded. The available
 fabric list initially follows the Fabric Inventory working selection and filters.
 **Use Named Selection** applies an existing Fabric selection locally, or restores
 the current Fabric working list; **Select Highlighted** restricts the source list
@@ -318,9 +321,9 @@ Reset Selection, Sort**, followed by screen-specific actions such as Refresh.
 
 **Select Highlighted** restricts the current working list to its highlighted
 rows. It requires at least one highlight and does not change inventory.
-**Filter** adds case-insensitive text-contains criteria, inclusive minimum
-width/length and an optional status. Text such as `%` is matched literally.
-Minimum-size filtering respects the recorded orientation.
+**Filter** adds case-insensitive text-contains criteria, inclusive minimum and maximum
+width/length and an optional status. Color uses the inventory color dropdown.
+Text such as `%` is matched literally. Size filtering respects the recorded orientation.
 
 **Set Selection** saves all records in the current working list, not just
 highlighted rows. Saved sets are database-backed snapshots of record IDs.

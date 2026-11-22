@@ -100,6 +100,8 @@ class ScreenTests(unittest.TestCase):
     def test_binding_audit_detects_unassigned_and_misassigned_controls(self):
         for field in FABRIC_FIELDS:
             widget = self.app.form.widgets[field.name]
+            if isinstance(widget, tk.Text):
+                continue
             original = widget.cget("textvariable")
             widget.configure(textvariable="")
             with self.subTest(field=field.name), self.assertRaises(FieldError):
@@ -159,6 +161,106 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(len(self.app.rows), 1)
         self.assertEqual(self.app.filters["MinimumWidth"], "")
         self.assertTrue(window.winfo_exists())
+
+    def test_filter_color_dropdown_and_inclusive_size_fields(self):
+        self.db.add_dropdown_item("Color", "Blue")
+        self.db.add_dropdown_item("Color", "Red")
+        selected = self.add_piece(Color="Blue", UsableWidth="10", UsableLength="20")
+        self.add_piece(Color="Red", UsableWidth="10", UsableLength="20")
+        self.add_piece(Color="Blue", UsableWidth="11", UsableLength="20")
+        self.app.open_filter()
+        window = self.dialog()
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        color = form.widgets["Color"]
+        self.assertIsInstance(color, ttk.Combobox)
+        self.assertIn("Blue", color.cget("values"))
+        self.assertIn("", color.cget("values"))
+        for minimum, maximum in (("MinimumWidth", "MaximumWidth"), ("MinimumLength", "MaximumLength")):
+            self.assertEqual(form.widgets[minimum].grid_info()["row"], form.widgets[maximum].grid_info()["row"])
+            self.assertLess(form.widgets[minimum].grid_info()["column"], form.widgets[maximum].grid_info()["column"])
+        for name, value in (("Color", "Blue"), ("MinimumWidth", "10"), ("MaximumWidth", "10"),
+                            ("MinimumLength", "20"), ("MaximumLength", "20")):
+            form.variables[name].set(value)
+        self.click(window, "Apply")
+        self.assertEqual(self.app.list.tree.get_children(), (str(selected),))
+        self.errors.assert_not_called()
+
+    def test_notes_are_wide_two_line_scrollable_and_persist(self):
+        self.root.deiconify()
+        self.root.update()
+        notes = self.app.form.widgets["Notes"]
+        self.assertIsInstance(notes, tk.Text)
+        self.assertEqual(notes.cget("height"), 2)
+        self.assertGreater(notes.winfo_width(), self.app.form.winfo_width() * .7)
+        scroll = next(w for w in notes.master.winfo_children() if isinstance(w, ttk.Scrollbar))
+        value = "First line\nSecond line\nThird line"
+        notes.insert("1.0", value)
+        self.root.update()
+        scroll.tk.call(scroll.cget("command"), "moveto", 1.0)
+        self.root.update()
+        self.assertGreater(notes.yview()[0], 0)
+        self.assertEqual(self.app.form.values()["Notes"], value)
+        self.app.form.assign(fabric(Notes=value))
+        self.app.add()
+        self.assertEqual(self.db.get_piece(self.app.piece_id)["Notes"], value)
+
+    def test_list_names_are_visually_capped_without_changing_records(self):
+        name = "A" * 50
+        block_id = self.db.add_block({
+            "BlockName": name, "Description": "", "FinishedWidth": "12", "FinishedLength": "12",
+            "Scale": "100", "SeamAllowance": "1/4",
+        })
+        source_id = self.db.save_piece(fabric(UsableWidth="100", UsableLength="100"))
+        from quilting.backs import generate_layouts, INCH
+        layout = generate_layouts([self.db.get_piece(source_id)], 30 * INCH, 30 * INCH, 0, INCH)[0]
+        back_id = self.db.save_back_draft(name, 30 * INCH, 30 * INCH, 0, INCH, layout)
+        self.app.refresh_blocks()
+        self.app.refresh_backs()
+        for listing, record_id, field in ((self.app.block_list, block_id, "BlockName"),
+                                          (self.app.back_list, back_id, "BackName")):
+            self.assertEqual(listing.tree.item(str(record_id), "values")[listing.columns.index(field)], name[:25])
+            self.assertTrue(all(not listing.tree.column(column, "stretch") for column in listing.columns))
+        self.assertEqual(self.db.get_block(block_id)["BlockName"], name)
+        self.assertEqual(self.db.get_quilt_back(back_id)["BackName"], name)
+
+    def test_large_separate_margins_warn_and_generate(self):
+        self.add_piece(UsableWidth="100", UsableLength="100")
+        self.app.show_screen("Quilt Backs")
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "40",
+            "Margin": "11", "SideMargin": "4", "SeamAllowance": "1",
+        })
+        with patch("quilting.ui.messagebox.showwarning") as warning:
+            self.app.generate_back_plans()
+            warning.assert_called_once()
+        self.assertEqual((self.app.back_selected_layout.target_width, self.app.back_selected_layout.target_length),
+                         (38_000_000, 62_000_000))
+        self.app.save_back_draft()
+        saved = self.db.get_quilt_back(self.app.back_selected_id)
+        self.assertEqual((saved["Margin"], saved["SideMargin"]), (11_000_000, 4_000_000))
+        self.app.back_form.variables["Margin"].set("10")
+        self.app.back_form.variables["SideMargin"].set("10")
+        with patch("quilting.ui.messagebox.showwarning") as warning:
+            self.app.generate_back_plans()
+            warning.assert_not_called()
+            self.app.back_form.variables["SideMargin"].set("10.000001")
+            self.app.generate_back_plans()
+            warning.assert_called_once()
+        self.errors.assert_not_called()
+
+    def test_back_margin_fields_fit_and_follow_top_bottom_margin(self):
+        self.root.deiconify()
+        self.root.geometry("1000x650")
+        self.app.show_screen("Quilt Backs")
+        self.root.update()
+        form = self.app.back_form
+        top, side = form.widgets["Margin"], form.widgets["SideMargin"]
+        self.assertEqual(form.labels["Margin"].cget("text"), "Top/Bottom Margin (in)")
+        self.assertEqual(top.grid_info()["row"], side.grid_info()["row"])
+        self.assertLess(top.grid_info()["column"], side.grid_info()["column"])
+        for widget in form.widgets.values():
+            self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(),
+                                 self.root.winfo_rootx() + self.root.winfo_width())
 
     def test_sort_dialog_persists_numeric_order(self):
         smaller = self.add_piece(UsableWidth="9")
@@ -221,18 +323,22 @@ class ScreenTests(unittest.TestCase):
     def test_all_entry_fields_are_left_aligned_and_do_not_stretch(self):
         def verify(form):
             for name, widget in form.widgets.items():
+                if isinstance(widget, tk.Text):
+                    continue
                 self.assertEqual(str(widget.cget("justify")), "left", name)
                 self.assertEqual(str(widget.grid_info()["sticky"]), "w", name)
-                if name in ("UsableWidth", "UsableLength", "MinimumWidth", "MinimumLength"):
+                if name in ("UsableWidth", "UsableLength", "MinimumWidth", "MaximumWidth",
+                            "MinimumLength", "MaximumLength"):
                     self.assertEqual(widget.cget("width"), 6, name)
         self.root.deiconify()
         self.root.geometry("1600x900")
         self.root.update()
         verify(self.app.form)
-        sizes = {name: widget.winfo_width() for name, widget in self.app.form.widgets.items()}
+        sizes = {name: widget.winfo_width() for name, widget in self.app.form.widgets.items() if name != "Notes"}
         self.root.geometry("1100x700")
         self.root.update()
-        self.assertEqual(sizes, {name: widget.winfo_width() for name, widget in self.app.form.widgets.items()})
+        self.assertEqual(sizes, {name: widget.winfo_width() for name, widget in self.app.form.widgets.items()
+                                 if name != "Notes"})
         self.app.open_filter()
         verify(next(child for child in self.dialog().winfo_children() if isinstance(child, Form)))
 
@@ -267,7 +373,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.back_stock.tree.get_children(), (str(first),))
         self.app.back_form.assign({
             "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
-            "Margin": "0", "SeamAllowance": "1",
+            "Margin": "0", "SideMargin": "0", "SeamAllowance": "1",
         })
         self.app.generate_back_plans()
         self.assertTrue(self.app.back_layouts)
@@ -306,7 +412,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.selected_ids, [first])
         self.app.back_form.assign({
             "BackName": "Back", "QuiltWidth": "30.123456", "QuiltLength": "30",
-            "Margin": "0", "SeamAllowance": "1",
+            "Margin": "0", "SideMargin": "0", "SeamAllowance": "1",
         })
         self.app.generate_back_plans()
         self.assertTrue(self.app.back_layouts)
@@ -324,14 +430,14 @@ class ScreenTests(unittest.TestCase):
         source = self.add_piece(FabricName="Precise", UsableWidth="100.123456", UsableLength="100")
         self.app.show_screen("Quilt Backs")
         self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
-        for name in ("QuiltWidth", "QuiltLength", "Margin", "SeamAllowance"):
+        for name in ("QuiltWidth", "QuiltLength", "Margin", "SideMargin", "SeamAllowance"):
             self.assertEqual(int(self.app.back_form.widgets[name].cget("width")), 8)
         self.assertEqual(self.app.back_form.grid_columnconfigure(1)["weight"], 0)
         values = self.app.back_stock.tree.item(str(source), "values")
         self.assertEqual(values[LIST_COLUMNS.index("UsableWidth")], "100.123")
         self.app.back_form.assign({
             "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
-            "Margin": "0", "SeamAllowance": "1",
+            "Margin": "0", "SideMargin": "0", "SeamAllowance": "1",
         })
         self.app.generate_back_plans()
         self.assertEqual(self.app.back_candidates.heading.cget("text"),
@@ -351,7 +457,7 @@ class ScreenTests(unittest.TestCase):
         self.app.show_screen("Quilt Backs")
         self.app.back_form.assign({
             "BackName": "Back A", "QuiltWidth": "30", "QuiltLength": "30",
-            "Margin": "0", "SeamAllowance": "1",
+            "Margin": "0", "SideMargin": "0", "SeamAllowance": "1",
         })
         self.app.back_stock.tree.selection_set(str(source_id))
         self.app.generate_back_plans()
@@ -978,6 +1084,7 @@ class ScreenTests(unittest.TestCase):
             "QuiltWidth": "50",
             "QuiltLength": "50",
             "Margin": "0",
+            "SideMargin": "0",
             "SeamAllowance": "1",
         })
         self.app.back_stock.tree.selection_set(tuple(map(str, source_ids)))
@@ -1149,6 +1256,8 @@ class ScreenTests(unittest.TestCase):
         self.assertTrue(any(isinstance(w, ttk.Label) and w.cget("text") == "Error Message"
                             for w in page.winfo_children()))
         form = self.app.error_form
+        self.assertEqual(form.labels["ErrorText"].grid_info()["row"], form.labels["LikelyCause"].grid_info()["row"])
+        self.assertGreater(form.labels["Description"].grid_info()["row"], form.labels["LikelyCause"].grid_info()["row"])
         id_field = next(w for w in descendants(page)
                         if isinstance(w, ttk.Entry) and str(w.cget("textvariable")) == str(self.app.error_id_value))
         self.assertEqual(str(id_field.cget("state")), "readonly")

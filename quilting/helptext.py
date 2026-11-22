@@ -84,7 +84,7 @@ SCREEN_HELP = {
     ),
     "Quilt Backs": (
         "Plan, sketch and record rectangular quilt-back panels.",
-        "Enter the quilt size, equal overhang margin and one seam allowance for the entire back. "
+        "Enter the quilt size, separate top/bottom and side overhang margins, and one seam allowance. "
         "Available rectangles initially follow the Fabric working list. Use Named Selection applies "
         "a saved Fabric selection or restores the Fabric working list; Select Highlighted restricts "
         "the source list independently. Highlight specific rectangles, or leave "
@@ -328,7 +328,12 @@ FIELD_HELP = {
               "characters. Inventory corrections should explain changes to the usable dimensions."),
     "MinimumWidth": ("Set an inclusive minimum width in inches.", "Blank means no width restriction. "
                      "Use the same inch formats as Usable Width. Filtering does not rotate pieces."),
+    "MaximumWidth": ("Set an inclusive maximum width in inches.", "Blank means no width restriction. "
+                     "Use the same inch formats as Usable Width. Filtering does not rotate pieces."),
     "MinimumLength": ("Set an inclusive minimum length in inches.", "Blank means no length "
+                      "restriction. Use the same inch formats as Usable Length. Filtering does "
+                      "not rotate pieces."),
+    "MaximumLength": ("Set an inclusive maximum length in inches.", "Blank means no length "
                       "restriction. Use the same inch formats as Usable Length. Filtering does "
                       "not rotate pieces."),
     "SavedSet": ("Choose a saved selection snapshot.", "Choose the named set to apply or delete. "
@@ -350,8 +355,10 @@ FIELD_HELP = {
                    "margin on both sides. Use the supported exact inch formats."),
     "QuiltLength": ("Enter the quilt's finished length in inches.", "The planned back adds the same "
                     "margin at both ends. Use the supported exact inch formats."),
-    "Margin": ("Set the same overhang on all four sides.", "Backing target width and length each add "
-               "twice this value to the quilt dimensions."),
+    "Margin": ("Set the top and bottom overhang.", "Backing target length adds twice this margin. "
+               "Values over 10 inches produce a warning."),
+    "SideMargin": ("Set the left and right overhang.", "Backing target width adds twice this margin. "
+                   "Values over 10 inches produce a warning."),
     "SeamAllowance": ("Set one allowance for every panel seam.", "Cut widths and lengths include this "
                       "same allowance on both joined edges."),
     "ListItem": ("Enter a new dropdown choice.", "Required nonblank text, up to 120 characters. "
@@ -364,6 +371,8 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
+    "Create from Template": ("Create a block from a named template.",
+                             "Create an editable draft using the entered size, scale and seam allowance."),
     "Quilt": ("Open quilt planning.", "Compose quilts and create non-consuming cutting plans."),
     "Add Quilt": ("Save a new quilt project.", "Enter a name and create an independent quilt."),
     "Set Block Quantity": ("Add or update a block quantity.", "Choose an approved version and its required count."),
@@ -488,6 +497,7 @@ SCREEN_FIELDS = {
         Field("QuiltWidth", "length", required=True, width=8),
         Field("QuiltLength", "length", required=True, width=8),
         Field("Margin", "length", default="4", width=8),
+        Field("SideMargin", "length", default="4", width=8),
         Field("SeamAllowance", "length", default="1/2", width=8),
     ),
     "Quilt Backs Fabric Selection": (Field("SavedSet"),),
@@ -533,7 +543,7 @@ SCREEN_COLUMNS = {
 SCREEN_BUTTONS = {
     "Quilt": ("Add Quilt", "Set Block Quantity", "Remove Block", "Map Color", "Remove Mapping",
               "Plan Quilt", "Print Quilt Plan"),
-    "QuiltBlock": ("Add", "Update", "Delete", "Clear", "New Version", "Parts", "Sketch", "Approve",
+    "QuiltBlock": ("Add", "Update", "Create from Template", "Delete", "Clear", "New Version", "Parts", "Sketch", "Approve",
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Block Parts": ("Add", "Update", "Delete", "Clear", "Close"),
     "Block Sketch": ("Save Placement", "Print Sketch", "Close"),
@@ -770,7 +780,8 @@ def default_help():
                 pair = (f"Filter by {field.label.lower()}.", SCREEN_HELP[screen][1])
             elif screen.endswith(" Set") and field.name == "SavedSet":
                 pair = ("Choose a saved working-list snapshot.", SCREEN_HELP[screen][1])
-            elif screen == "Filter" and field.name not in ("MinimumWidth", "MinimumLength"):
+            elif screen == "Filter" and field.name not in (
+                    "MinimumWidth", "MaximumWidth", "MinimumLength", "MaximumLength"):
                 pair = (f"Filter fabric by {field.label.lower()}.",
                         "Blank means no restriction. " + (
                             "Choose Available or Retired for an exact status match."

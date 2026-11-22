@@ -119,11 +119,13 @@ def _tier(panels, quilt_width, quilt_length):
 
 
 def generate_layouts(pieces, quilt_width, quilt_length, margin, seam_allowance,
-                     palette_by_piece=None):
+                     palette_by_piece=None, *, side_margin=None):
     """Rank up to twenty-panel, single-axis straight-cut plans from selected stock rectangles."""
-    if min(quilt_width, quilt_length) <= 0 or margin < 0 or seam_allowance < 0:
+    if side_margin is None:
+        side_margin = margin
+    if min(quilt_width, quilt_length) <= 0 or min(margin, side_margin, seam_allowance) < 0:
         raise FieldError("Measurement", "QuiltDimensions")
-    target_width = quilt_width + 2 * margin
+    target_width = quilt_width + 2 * side_margin
     target_length = quilt_length + 2 * margin
     stock = sorted(
         (dict(piece) for piece in pieces if piece["Status"] == "Available"),

@@ -43,6 +43,45 @@ class QuiltBackPlanningTests(unittest.TestCase):
         self.assertIn("marker-end", layout_svg(layout))
         self.assertEqual(ratio_label(layout.ratio_tier), "20% target met")
 
+    def test_separate_margins_are_saved_and_checked(self):
+        source_id = self.add_piece(UsableWidth="100", UsableLength="100")
+        source = self.db.get_piece(source_id)
+        layout = generate_layouts([source], 40 * INCH, 50 * INCH, 3 * INCH, INCH,
+                                  side_margin=5 * INCH)[0]
+        self.assertEqual((layout.target_width, layout.target_length), (50 * INCH, 56 * INCH))
+        with self.assertRaises(FieldError):
+            self.db.save_back_draft("Back", 40 * INCH, 50 * INCH, 3 * INCH, INCH, layout,
+                                    side_margin=4 * INCH)
+        back_id = self.db.save_back_draft("Back", 40 * INCH, 50 * INCH, 3 * INCH, INCH, layout,
+                                          side_margin=5 * INCH)
+        self.db.close()
+        self.db = Database(self.path)
+        back = self.db.get_quilt_back(back_id)
+        self.assertEqual((back["Margin"], back["SideMargin"]), (3 * INCH, 5 * INCH))
+
+    def test_v12_upgrade_preserves_existing_margin(self):
+        source_id = self.add_piece(UsableWidth="100", UsableLength="100")
+        layout = generate_layouts([self.db.get_piece(source_id)], 40 * INCH, 40 * INCH, 4 * INCH, INCH)[0]
+        back_id = self.db.save_back_draft("Old back", 40 * INCH, 40 * INCH, 4 * INCH, INCH, layout)
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE HelpText SET HoverText=?, FullText=? WHERE TableName='Quilt Backs' AND FieldName='Margin'",
+                ("Set the same overhang on all four sides.",
+                 "Backing target width and length each add twice this value to the quilt dimensions."),
+            )
+            self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("PRAGMA user_version = 12")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        back = self.db.get_quilt_back(back_id)
+        self.assertEqual((back["Margin"], back["SideMargin"]), (4 * INCH, 4 * INCH))
+        self.assertIn("top and bottom", self.db.help_pair("Quilt Backs", "Margin")[0])
+        self.assertIn("left and right", self.db.help_pair("Quilt Backs", "SideMargin")[0])
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 12)
+
     def test_equal_strip_candidates_include_seam_allowance_and_grain_mix(self):
         pieces = [
             self.db.get_piece(self.add_piece(
@@ -226,6 +265,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             connection.execute("DROP TABLE NewMember")
             connection.execute("DROP TABLE NewSet")
             downgrade_dropdown_schema(connection)
+            connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             connection.execute("PRAGMA user_version = 6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -271,6 +311,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
                 f"INSERT INTO QuiltBackPanelOld ({columns}) SELECT {columns} FROM QuiltBackPanel")
             self.db.connection.execute("DROP TABLE QuiltBackPanel")
             self.db.connection.execute("ALTER TABLE QuiltBackPanelOld RENAME TO QuiltBackPanel")
+            self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("PRAGMA user_version = 11")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
