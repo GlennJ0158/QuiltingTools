@@ -7,6 +7,7 @@ import traceback
 import tkinter as tk
 import webbrowser
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
@@ -73,6 +74,11 @@ def display_timestamp(value):
     return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def display_back_measurement(value):
+    rounded = (Decimal(value) / INCH).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    return format(rounded, "f").rstrip("0").rstrip(".") if rounded % 1 else str(int(rounded))
+
+
 def nonnegative_measurement(value, field):
     text = value.strip()
     if re.fullmatch(r"0(?:\.0{1,6})?", text):
@@ -84,10 +90,12 @@ class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
-                 memo_height=None, memo_width=None, memo_scrollbars=False):
+                 memo_height=None, memo_width=None, memo_scrollbars=False,
+                 dropdown_scope="FabricPiece"):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
+        self.dropdown_scope = dropdown_scope
         self.variables, self.widgets = {}, {}
         self.previous_choices = {}
         owner = self.winfo_toplevel().help_owner
@@ -116,14 +124,14 @@ class Form(ttk.Frame):
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
             elif field.kind in ("choice", "dropdown"):
-                widget = ttk.Combobox(self, textvariable=variable, values=field.choices,
+                widget = ttk.Combobox(self, textvariable=variable, values=self.choices(field),
                                       state="readonly", width=field.width, justify="left")
             else:
                 widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
             (container or widget).grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
             self.variables[field.name], self.widgets[field.name] = variable, widget
             owner.attach_help(widget, field.name)
-            if database is not None and field.name in DROPDOWN_FIELDS:
+            if database is not None and field.name in DROPDOWN_FIELDS and field.kind == "dropdown":
                 widget.bind("<<ComboboxSelected>>", lambda event, name=field.name: self.choose_item(name))
                 variable.trace_add("write", lambda *_, name=field.name: self.remember_choice(name))
             self.columnconfigure(column + 1, weight=1)
@@ -148,19 +156,32 @@ class Form(ttk.Frame):
 
     def remember_choice(self, name):
         value = self.variables[name].get()
-        if value != ADD_ITEM:
+        if value != ADD_ITEM and value != self.placeholder(name):
             self.previous_choices[name] = value
+
+    def placeholder(self, name):
+        return f"Choose {name}"
+
+    def uses_dropdown_list(self, name):
+        field = next(field for field in self.fields if field.name == name)
+        return (field.kind in ("choice", "dropdown") and self.database is not None
+                and self.database.has_dropdown_list(self.dropdown_scope, name))
+
+    def choices(self, field):
+        if self.uses_dropdown_list(field.name):
+            return self.database.dropdown_choices(field.name, self.dropdown_scope)
+        return field.choices
 
     def refresh_choices(self):
         if self.database is not None:
-            for name in self.variables:
-                if name in DROPDOWN_FIELDS:
-                    self.widgets[name].configure(values=self.database.dropdown_choices(name))
+            for field in self.fields:
+                if self.uses_dropdown_list(field.name):
+                    self.widgets[field.name].configure(values=self.choices(field))
 
     def choose_item(self, name):
         if self.variables[name].get() != ADD_ITEM:
             return
-        previous = self.previous_choices.get(name, "")
+        previous = self.previous_choices.get(name, self.placeholder(name))
         # Never leave the action sentinel in an inventory form, including after Cancel or an error.
         self.variables[name].set(previous)
         self.winfo_toplevel().help_owner.open_add_item(self, name)
@@ -180,7 +201,11 @@ class Form(ttk.Frame):
         for field in self.fields:
             if field.kind == "memo":
                 self.read_text(field.name)
-        return {name: variable.get() for name, variable in self.variables.items()}
+        return {
+            name: "" if self.uses_dropdown_list(name) and variable.get() == self.placeholder(name)
+            else variable.get()
+            for name, variable in self.variables.items()
+        }
 
     def assign(self, values):
         self.assert_bindings()
@@ -188,12 +213,15 @@ class Form(ttk.Frame):
         if set(values) != set(self.variables):
             raise FieldError("Binding", "Form", detail="loaded values do not match the form fields")
         for name, value in values.items():
+            field = next(field for field in self.fields if field.name == name)
+            if value is None or value == "":
+                value = self.placeholder(name) if self.uses_dropdown_list(name) else ""
             self.variables[name].set(value)
 
     def defaults(self):
         self.assign({
-            field.name: self.database.dropdown_default(field.name)
-            if self.database is not None and field.name in DROPDOWN_FIELDS else field.default
+            field.name: self.database.dropdown_default(field.name, self.dropdown_scope)
+            if self.uses_dropdown_list(field.name) else field.default
             for field in self.fields
         })
 
@@ -203,9 +231,10 @@ class Form(ttk.Frame):
 
 
 class RecordList(ttk.Frame):
-    def __init__(self, parent, columns):
+    def __init__(self, parent, columns, measurement_display=display_measurement):
         super().__init__(parent, padding=(8, 0, 8, 8))
         self.columns = columns
+        self.measurement_display = measurement_display
         self.heading = ttk.Label(self, text="", wraplength=1100)
         self.heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 3))
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
@@ -242,15 +271,16 @@ class RecordList(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             values = [
-                display_measurement(row[name]) if name in (
+                self.measurement_display(row[name]) if name in (
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else row[name] for name in self.columns
             ]
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
-        order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort)
-        self.heading.configure(text=f"{len(rows)} {noun} selected; Sort: {order}{context}")
+        order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort) if sort else ""
+        self.heading.configure(text=f"{len(rows)} {noun} selected"
+                               + (f"; Sort: {order}" if order else "") + context)
 
 
 class Application(BlockScreenMixin, QuiltScreenMixin):
@@ -616,7 +646,10 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             fields = self.working_list_fields(screen)
             title = f"Filter {screen}"
             window = self.dialog(title, f"{screen} Filter")
-            form = Form(window, fields, columns=1)
+            form = Form(
+                window, fields, columns=1, database=self.db,
+                dropdown_scope=f"{screen} Filter",
+            )
             form.pack(fill="both", expand=True)
             form.assign(state["filters"])
             self.watch_dialog(window, form)
@@ -639,7 +672,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         fields = ERROR_FILTER_FIELDS if errors else FILTER_FIELDS
         window = self.dialog("Filter Error Messages" if errors else "Filter Fabric Inventory",
                              "Error Filter" if errors else "Filter")
-        form = Form(window, fields, columns=1)
+        form = Form(
+            window, fields, columns=1,
+            database=None if errors else self.db,
+            dropdown_scope="ErrorMessage Filter" if errors else "FabricPiece",
+        )
         form.pack(fill="both", expand=True)
         form.assign(self.error_filters if errors else self.filters)
         self.watch_dialog(window, form)
@@ -666,16 +703,36 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def open_add_item(self, source, name):
         window = self.dialog(f"Add Item - {caption(name)}", "Add Item")
-        form = Form(window, (Field("ListItem", required=True),), columns=1)
+        form = Form(window, (Field("ListItem", required=True),
+                             Field("Def", "choice", choices=("Clear Default", "Set Default"),
+                                   default="Clear Default")), columns=1)
         form.pack(fill="x")
         self.watch_dialog(window, form)
 
         def add():
-            item = validate_fields(form.fields, form.values())["ListItem"]
-            stored = self.db.add_dropdown_item(name, item)
+            values = validate_fields(form.fields, form.values())
+            item = values["ListItem"]
+            set_default = values["Def"] == "Set Default"
+            clear_others = False
+            if set_default and self.db.other_dropdown_defaults("FabricPiece", name, item_value=item):
+                decision = messagebox.askyesnocancel(
+                    "Existing Defaults", "Clear the other defaults for this list?",
+                    parent=window,
+                )
+                if decision is None:
+                    return
+                clear_others = decision
+            stored = self.db.add_dropdown_item(name, item, set_default, clear_others)
             source.refresh_choices()
             source.variables[name].set(stored)
             window.destroy()
+            if set_default and sum(row["Def"] for row in self.db.dropdown_rows(
+                    name, include_inactive=True)) > 1:
+                messagebox.showwarning(
+                    "Multiple Defaults", "This list has more than one default. "
+                    "Only the first active default encountered is used; clear the others.",
+                    parent=self.root,
+                )
 
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
@@ -930,15 +987,34 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             raise FieldError("Choice", "Def")
         if values["Use"] not in ("", "Set Use", "Clear Use", "Ignore for Update"):
             raise FieldError("Choice", "Use")
+        clear_others = False
+        if (item_id is not None and values["Def"] not in ("", "Ignore for Update")
+                and flags[values["Def"]] != self.dropdown_row["Def"]
+                and not self.dropdown_row["UserModified"]):
+            if not messagebox.askyesno(
+                    "Protected Default",
+                    "Changing this system-list default may change internal program operations or assumptions. "
+                    "Continue?",
+                    parent=self.root,
+            ):
+                return
+        if values["Def"] == "Set Default" and self.db.other_dropdown_defaults(
+                table_name, field_name, item_id=item_id):
+            decision = messagebox.askyesnocancel(
+                "Existing Defaults", "Clear the other defaults for this list?", parent=self.root,
+            )
+            if decision is None:
+                return
+            clear_others = decision
         _, warning = self.db.save_dropdown(
             table_name, field_name, values["ListItem"], flags[values["Def"]], flags[values["Use"]],
-            item_id, self.dropdown_row if item_id is not None else None,
+            item_id, self.dropdown_row if item_id is not None else None, clear_others,
         )
         self.refresh_dropdowns()
         if warning:
             messagebox.showwarning(
                 "Multiple Defaults", "This list has more than one default. "
-                "Only the first active default alphabetically is used; clear the others.",
+                "Only the first active default encountered is used; clear the others.",
                 parent=self.root,
             )
 
@@ -1090,13 +1166,18 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         entry.pack(fill="x")
         self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
         self.back_form.pack(fill="x")
+        for column in range(1, 10, 2):
+            self.back_form.columnconfigure(column, weight=0)
+        self.back_form.columnconfigure(10, weight=1)
         self.back_initial = self.back_form.values()
         stock_actions = ttk.Frame(entry, padding=(8, 0), style="Entry.TFrame")
         stock_actions.pack(fill="x")
         ttk.Label(stock_actions, text="Available source rectangles", style="Entry.TLabel").pack(side="left", padx=(0, 10))
         self.button(stock_actions, "Set Sketch Color", self.set_back_palette)
         self.button(stock_actions, "Refresh Fabric", self.refresh_back_stock)
-        self.back_stock = RecordList(self.backs_page, LIST_COLUMNS)
+        self.button(stock_actions, "Use Named Selection", self.open_back_fabric_selection)
+        self.button(stock_actions, "Select Highlighted", self.select_back_fabric)
+        self.back_stock = RecordList(self.backs_page, LIST_COLUMNS, display_back_measurement)
         self.back_stock.tree.configure(height=5)
         self.back_stock.pack(fill="both", expand=True)
         actions = ttk.Frame(self.backs_page, padding=(8, 0))
@@ -1122,7 +1203,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             rows=lambda: self.db.quilt_backs(
                 self.back_state["filters"], self.back_state["selected_ids"], self.back_state["sort"]),
         )
-        self.back_list = RecordList(self.backs_page, BACK_COLUMNS)
+        self.back_list = RecordList(self.backs_page, BACK_COLUMNS, display_back_measurement)
         self.back_list.tree.configure(height=3)
         self.back_list.pack(fill="both", expand=True)
         self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
@@ -1136,15 +1217,62 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_selected_layout = None
         self.back_selected_id = None
         self.back_palette = {}
+        self.back_fabric_ids = None
+        self.back_fabric_description = ""
         self.back_initial = self.back_form.values()
         self.refresh_back_stock()
+        self.back_candidates.fill([], "ranked layout plans", None)
         self.refresh_backs()
         self.back_confirm_button.state(["disabled"])
         self.back_assembled_button.state(["disabled"])
 
     def refresh_back_stock(self):
-        rows = self.available_inventory()
-        self.back_stock.fill(rows, "available fabric rectangles", self.sort)
+        rows = self.back_available_inventory()
+        context = f"; {self.back_fabric_description}" if self.back_fabric_description else ""
+        self.back_stock.fill(rows, "available fabric rectangles", self.sort, context)
+
+    def back_available_inventory(self):
+        if self.back_fabric_ids is None:
+            return self.available_inventory()
+        return [row for row in self.db.pieces(selected_ids=self.back_fabric_ids, sort=self.sort)
+                if row["Status"] == "Available"]
+
+    def select_back_fabric(self):
+        selected = self.back_stock.tree.selection()
+        if not selected:
+            raise FieldError("NoHighlight", "Fabric Inventory")
+        self.back_fabric_ids = [int(item) for item in selected]
+        self.back_fabric_description = "Highlighted-record restriction"
+        self.refresh_back_stock()
+
+    def open_back_fabric_selection(self):
+        sets = {
+            f"{row['SetName']} ({row['RecordCount']} records; ID {row['ID']})": row["ID"]
+            for row in self.db.sets("Fabric")
+        }
+        working_list = "Current Fabric working list"
+        fields = (Field("SavedSet", "choice", choices=(working_list, *sets), default=working_list),)
+        window = self.dialog("Choose Fabric Selection", "Quilt Backs Fabric Selection")
+        form = Form(window, fields, columns=1)
+        form.pack(fill="x")
+        self.watch_dialog(window, form)
+
+        def apply():
+            choice = validate_fields(fields, form.values())["SavedSet"]
+            if choice == working_list:
+                self.back_fabric_ids = None
+                self.back_fabric_description = ""
+            else:
+                set_id = sets[choice]
+                self.back_fabric_ids = self.db.set_members(set_id, "Fabric")
+                self.back_fabric_description = f"Selection set ID {set_id}"
+            window.destroy()
+            self.refresh_back_stock()
+
+        actions = ttk.Frame(window, padding=8)
+        actions.pack(fill="x")
+        self.button(actions, "Apply", apply)
+        self.button(actions, "Cancel", window.destroy)
 
     def available_inventory(self):
         return [row for row in self.db.pieces(self.filters, self.selected_ids, self.sort)
@@ -1172,7 +1300,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
             if values["SeamAllowance"] else 0
         )
-        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.available_inventory()
+        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.back_available_inventory()
         self.back_selected_id = None
         self.back_list.tree.selection_remove(self.back_list.tree.selection())
         self.back_confirm_button.state(["disabled"])
@@ -1194,7 +1322,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 "FabricArea": f"{layout.stock_area / (INCH * INCH):,.1f} sq in",
             }
             for index, layout in enumerate(self.back_layouts, 1)
-        ], "ranked layout plans", (("ID", "asc"),))
+        ], "ranked layout plans", None)
         self.back_selected_layout = self.back_layouts[0] if self.back_layouts else None
         if self.back_layouts:
             self.back_candidates.tree.selection_set("1")
@@ -1312,8 +1440,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_assembled_button.state(["!disabled"] if back["Status"] == "Cut" else ["disabled"])
         self.back_status.configure(
             text=f"Back {back['ID']}: {back['BackName']} — {back['Status']}; "
-                 f"{display_measurement(back['BackWidth'])} × "
-                 f"{display_measurement(back['BackLength'])} in.",
+                 f"{display_back_measurement(back['BackWidth'])} × "
+                 f"{display_back_measurement(back['BackLength'])} in.",
         )
 
     def open_back_cut(self):
@@ -1341,16 +1469,16 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         for source_id, panels in sources.items():
             panel = panels[0]
             planned = ", ".join(
-                f"Part {item['PanelNumber']}: {display_measurement(item['CutWidth'])} × "
-                f"{display_measurement(item['CutLength'])} in"
+                f"Part {item['PanelNumber']}: {display_back_measurement(item['CutWidth'])} × "
+                f"{display_back_measurement(item['CutLength'])} in"
                 for item in panels
             )
             ttk.Label(
                 window,
                 text=f"Source {source_id}: {panel['FabricName']} "
                      f"({panel['InventoryColor'] or 'no color recorded'}), "
-                     f"{display_measurement(panel['SourceWidth'])} × "
-                     f"{display_measurement(panel['SourceLength'])} in. Planned cuts: {planned}",
+                     f"{display_back_measurement(panel['SourceWidth'])} × "
+                     f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (rounded): {planned}",
                 padding=(8, 4),
             ).pack(anchor="w")
         form = Form(window, tuple(fields), columns=2)

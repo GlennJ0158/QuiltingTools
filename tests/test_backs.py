@@ -8,7 +8,7 @@ from quilting.backs import (
 )
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
-from tests.test_inventory import fabric
+from tests.test_inventory import downgrade_dropdown_schema, fabric
 
 
 class QuiltBackPlanningTests(unittest.TestCase):
@@ -179,6 +179,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
+            downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -224,6 +225,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             connection.execute("INSERT INTO WorkingListMember SELECT * FROM NewMember")
             connection.execute("DROP TABLE NewMember")
             connection.execute("DROP TABLE NewSet")
+            downgrade_dropdown_schema(connection)
             connection.execute("PRAGMA user_version = 6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -236,6 +238,60 @@ class QuiltBackPlanningTests(unittest.TestCase):
             self.assertEqual(
                 backup.execute("SELECT RecordID FROM WorkingListMember").fetchone()[0], help_id,
             )
+
+    def test_version_eleven_upgrade_makes_panel_inventory_color_nullable(self):
+        source_id = self.add_piece(Color="Navy", UsableWidth="100", UsableLength="100")
+        layout = generate_layouts([self.db.get_piece(source_id)], 30 * INCH, 30 * INCH, 0, INCH)[0]
+        back_id = self.db.save_back_draft("Legacy color snapshot", 30 * INCH, 30 * INCH, 0, INCH, layout)
+        before = self.db.get_quilt_back(back_id)["Panels"][0]["InventoryColor"]
+        empty_source_id = self.add_piece(Color=None, UsableWidth="100", UsableLength="100")
+        empty_layout = generate_layouts(
+            [self.db.get_piece(empty_source_id)], 30 * INCH, 30 * INCH, 0, INCH,
+        )[0]
+        empty_back_id = self.db.save_back_draft(
+            "Legacy empty snapshot", 30 * INCH, 30 * INCH, 0, INCH, empty_layout,
+        )
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE QuiltBackPanel SET InventoryColor = '' WHERE QuiltBackID = ?",
+                (empty_back_id,),
+            )
+            sql = self.db.connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='QuiltBackPanel'",
+            ).fetchone()[0]
+            old_sql = sql.replace("CREATE TABLE QuiltBackPanel", "CREATE TABLE QuiltBackPanelOld", 1)
+            old_sql = old_sql.replace(
+                "InventoryColor TEXT CHECK(InventoryColor IS NULL OR length(InventoryColor) <= 120)",
+                "InventoryColor TEXT NOT NULL CHECK(length(InventoryColor) <= 120)",
+            )
+            self.db.connection.execute(old_sql)
+            columns = ", ".join(row[1] for row in self.db.connection.execute(
+                "PRAGMA table_info(QuiltBackPanel)"))
+            self.db.connection.execute(
+                f"INSERT INTO QuiltBackPanelOld ({columns}) SELECT {columns} FROM QuiltBackPanel")
+            self.db.connection.execute("DROP TABLE QuiltBackPanel")
+            self.db.connection.execute("ALTER TABLE QuiltBackPanelOld RENAME TO QuiltBackPanel")
+            self.db.connection.execute("PRAGMA user_version = 11")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(
+            self.db.get_quilt_back(back_id)["Panels"][0]["InventoryColor"], before,
+        )
+        self.assertIsNone(self.db.get_quilt_back(empty_back_id)["Panels"][0]["InventoryColor"])
+        inventory_color = next(row for row in self.db.connection.execute(
+            "PRAGMA table_info(QuiltBackPanel)") if row[1] == "InventoryColor")
+        self.assertEqual(inventory_color[3], 0)
+        uncolored_id = self.add_piece(Color=None, UsableWidth="100", UsableLength="100")
+        uncolored_layout = generate_layouts(
+            [self.db.get_piece(uncolored_id)], 30 * INCH, 30 * INCH, 0, INCH,
+        )[0]
+        uncolored_back_id = self.db.save_back_draft(
+            "Uncolored snapshot", 30 * INCH, 30 * INCH, 0, INCH, uncolored_layout,
+        )
+        self.assertIsNone(self.db.get_quilt_back(uncolored_back_id)["Panels"][0]["InventoryColor"])
+        self.assertEqual(self.db.connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
 
 if __name__ == "__main__":

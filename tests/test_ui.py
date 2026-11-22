@@ -13,7 +13,7 @@ from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
 )
-from quilting.ui import Application, Form, RecordList, display_timestamp
+from quilting.ui import Application, Form, RecordList, display_back_measurement, display_timestamp
 from tests.test_inventory import fabric
 from tests.test_errors import error_values
 
@@ -53,6 +53,7 @@ class ScreenTests(unittest.TestCase):
         self.root.withdraw()
         self.errors = patch("quilting.ui.messagebox.showerror").start()
         self.confirm = patch("quilting.ui.messagebox.askyesno", return_value=True).start()
+        self.default_confirm = patch("quilting.ui.messagebox.askyesnocancel", return_value=False).start()
         self.app = Application(self.root, self.db)
         self.root.update()
 
@@ -276,6 +277,73 @@ class ScreenTests(unittest.TestCase):
         self.app.refresh_back_stock()
         self.assertEqual(set(self.app.back_stock.tree.get_children()), {str(first), str(second)})
 
+    def test_back_fabric_selection_is_independent_and_generation_uses_visible_sources(self):
+        first = self.add_piece(FabricName="First", UsableWidth="100", UsableLength="100")
+        second = self.add_piece(FabricName="Second", UsableWidth="100", UsableLength="100")
+        retired = self.db.save_piece(fabric(
+            FabricName="Retired", UsableWidth="100", UsableLength="100", Status="Retired",
+        ))
+        set_id = self.db.save_set("Sources", [first, second, retired])
+        self.app.selected_ids = [first]
+        self.app.show_screen("Quilt Backs")
+        actions = self.app.back_stock.master.winfo_children()[0]
+        stock_actions = next(w for w in descendants(actions)
+                             if isinstance(w, ttk.Button) and w.cget("text") == "Refresh Fabric").master
+        self.assertEqual([w.cget("text") for w in stock_actions.winfo_children()
+                          if isinstance(w, ttk.Button)][-3:],
+                         ["Refresh Fabric", "Use Named Selection", "Select Highlighted"])
+        self.click(stock_actions, "Use Named Selection")
+        dialog = self.app.dialogs[-1]
+        form = self.app.dialog_forms[dialog][0]
+        form.variables["SavedSet"].set(f"Sources (3 records; ID {set_id})")
+        self.click(dialog, "Apply")
+        self.assertEqual(set(self.app.back_stock.tree.get_children()), {str(first), str(second)})
+        with self.assertRaises(FieldError):
+            self.app.select_back_fabric()
+        self.app.back_stock.tree.selection_set(str(second))
+        self.click(stock_actions, "Select Highlighted")
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(second),))
+        self.assertEqual(self.app.selected_ids, [first])
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30.123456", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.generate_back_plans()
+        self.assertTrue(self.app.back_layouts)
+        self.assertTrue(all(panel.source_id == second for layout in self.app.back_layouts
+                            for panel in layout.panels))
+        self.app.save_back_draft()
+        self.assertEqual(self.db.get_quilt_back(self.app.back_selected_id)["QuiltWidth"], 30_123_456)
+        self.click(stock_actions, "Use Named Selection")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(first),))
+        self.assertEqual(self.app.selected_ids, [first])
+        self.errors.assert_not_called()
+
+    def test_back_layout_count_compact_fields_and_rounded_display(self):
+        source = self.add_piece(FabricName="Precise", UsableWidth="100.123456", UsableLength="100")
+        self.app.show_screen("Quilt Backs")
+        self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
+        for name in ("QuiltWidth", "QuiltLength", "Margin", "SeamAllowance"):
+            self.assertEqual(int(self.app.back_form.widgets[name].cget("width")), 8)
+        self.assertEqual(self.app.back_form.grid_columnconfigure(1)["weight"], 0)
+        values = self.app.back_stock.tree.item(str(source), "values")
+        self.assertEqual(values[LIST_COLUMNS.index("UsableWidth")], "100.123")
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.generate_back_plans()
+        self.assertEqual(self.app.back_candidates.heading.cget("text"),
+                         f"{len(self.app.back_layouts)} ranked layout plans selected")
+        self.app.back_form.variables["QuiltWidth"].set("1000")
+        self.app.generate_back_plans()
+        self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
+        self.assertEqual(self.db.get_piece(source)["UsableWidth"], 100_123_456)
+        self.assertEqual(display_back_measurement(15_625), "0.016")
+        self.assertEqual(display_back_measurement(1_234_500), "1.235")
+        self.assertEqual(display_back_measurement(10_800_000_000), "10800")
+
     def test_quilt_back_saved_plans_have_isolated_ordered_working_list_tools(self):
         source_id = self.add_piece(
             FabricName="Backing", UsableWidth="100", UsableLength="100",
@@ -297,7 +365,7 @@ class ScreenTests(unittest.TestCase):
 
         labels = [widget.cget("text") for widget in descendants(self.app.backs_page)
                   if isinstance(widget, ttk.Button)]
-        start = labels.index("Select Highlighted")
+        start = len(labels) - 1 - labels[::-1].index("Select Highlighted")
         self.assertEqual(labels[start:start + 5], [
             "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
         ])
@@ -313,7 +381,9 @@ class ScreenTests(unittest.TestCase):
         self.click(self.app.backs_page, "Reset Selection")
         back_b = next(row["ID"] for row in self.db.quilt_backs() if row["BackName"] == "Back B")
         self.app.back_list.tree.selection_set(str(back_b))
-        self.click(self.app.backs_page, "Select Highlighted")
+        saved_tools = next(w for w in descendants(self.app.backs_page)
+                           if isinstance(w, ttk.Button) and w.cget("text") == "Filter").master
+        self.click(saved_tools, "Select Highlighted")
         self.assertEqual(self.app.back_list.tree.get_children(), (str(back_b),))
         self.assertEqual(self.app.back_stock.tree.get_children(), (str(source_id),))
         self.assertEqual(self.app.back_candidates.tree.get_children(), candidate_ids)
@@ -374,7 +444,7 @@ class ScreenTests(unittest.TestCase):
     def test_dropdown_add_item_cancel_validation_order_and_default_form_values(self):
         widget = self.app.form.widgets["Color"]
         for name in ("FabricName", "Color", "PatternName", "StorageLocation"):
-            self.assertEqual(self.app.form.widgets[name].cget("values")[1], ADD_ITEM)
+            self.assertEqual(self.app.form.widgets[name].cget("values")[0], ADD_ITEM)
         def enter_item(response):
             self.app.form.variables["Color"].set(ADD_ITEM)
             widget.event_generate("<<ComboboxSelected>>")
@@ -390,7 +460,7 @@ class ScreenTests(unittest.TestCase):
 
         enter_item("Sage")
         self.assertEqual(self.app.form.variables["Color"].get(), "Sage")
-        self.assertEqual(self.db.dropdown_choices("Color"), ("", ADD_ITEM, "Sage"))
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM, "Sage"))
         for response in (None, " ", "sAGE"):
             enter_item(response)
             self.assertEqual(self.app.form.variables["Color"].get(), "Sage")
@@ -401,6 +471,7 @@ class ScreenTests(unittest.TestCase):
         self.app.clear()
         self.assertEqual(self.app.form.variables["Color"].get(), "Sage")
         self.assertEqual(self.app.form.widgets["Color"].cget("values")[:2], ("Sage", ADD_ITEM))
+        self.assertEqual(self.app.form.variables["FabricName"].get(), "Choose FabricName")
 
     def test_dropdown_setup_sets_default_without_changing_existing_record(self):
         piece_id = self.add_piece(Color="Blue")
@@ -412,8 +483,8 @@ class ScreenTests(unittest.TestCase):
         form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
         listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
-        blank_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
-        listing.tree.selection_set(str(blank_id))
+        blue_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
+        listing.tree.selection_set(str(blue_id))
         self.root.update()
         form.variables["Def"].set("Clear Default")
         self.click(window, "Update")
@@ -428,6 +499,27 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.form.variables["Color"].get(), "Red")
         self.errors.assert_not_called()
 
+    def test_add_item_can_replace_existing_defaults_or_cancel(self):
+        self.db.add_dropdown_item("Color", "Blue", default=True)
+        widget = self.app.form.widgets["Color"]
+        self.app.form.variables["Color"].set(ADD_ITEM)
+        widget.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        window = self.app.dialogs[-1]
+        form = self.app.dialog_forms[window][0]
+        form.variables["ListItem"].set("Sage")
+        form.variables["Def"].set("Set Default")
+        self.default_confirm.return_value = None
+        self.click(window, "Add Item")
+        self.assertTrue(window.winfo_exists())
+        self.assertEqual(self.db.dropdown_default("Color"), "Blue")
+        self.assertNotIn("Sage", self.db.dropdown_choices("Color"))
+        self.default_confirm.return_value = True
+        self.click(window, "Add Item")
+        self.assertEqual(self.db.dropdown_default("Color"), "Sage")
+        self.assertEqual(self.app.form.variables["Color"].get(), "Sage")
+        self.errors.assert_not_called()
+
     def test_dropdown_add_update_delete_and_multiple_default_warning(self):
         warning = patch("quilting.ui.messagebox.showwarning").start()
         self.app.open_dropdowns()
@@ -438,6 +530,10 @@ class ScreenTests(unittest.TestCase):
         form.variables["ListItem"].set("Blue")
         self.click(self.app.dropdown_page, "Add")
         self.assertEqual(self.errors.call_count, 1)
+        form.variables["Def"].set("Set Default")
+        form.variables["Use"].set("Set Use")
+        self.click(self.app.dropdown_page, "Add")
+        form.variables["ListItem"].set("Green")
         form.variables["Def"].set("Set Default")
         form.variables["Use"].set("Set Use")
         self.click(self.app.dropdown_page, "Add")
@@ -458,18 +554,19 @@ class ScreenTests(unittest.TestCase):
 
     def test_dropdown_draft_survives_cancelled_selection_and_scope_changes(self):
         self.db.add_dropdown_item("Color", "Blue")
+        self.db.add_dropdown_item("Color", "Sage")
         self.app.open_dropdowns()
         form = self.app.dropdown_form
         form.variables["FieldName"].set("Color")
         form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
         blue = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
-        blank = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
+        sage = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Sage")
         self.app.dropdown_list.tree.selection_set(str(blue["ID"]))
         self.root.update()
         form.variables["ListItem"].set("Draft")
         self.confirm.return_value = False
-        self.app.dropdown_list.tree.selection_set(str(blank["ID"]))
+        self.app.dropdown_list.tree.selection_set(str(sage["ID"]))
         self.root.update()
         self.assertEqual(self.app.dropdown_list.tree.selection(), (str(blue["ID"]),))
         form.variables["FieldName"].set("PatternName")
@@ -992,25 +1089,28 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.sets("History", other_piece), [])
         self.errors.assert_not_called()
 
-    def test_dropdown_screen_edits_table_or_screen_key_and_compacts_columns(self):
+    def test_dropdown_screen_shows_protection_and_limits_supported_keys(self):
         self.app.show_screen("DropDown")
         self.assertEqual(tuple(field.name for field in self.app.dropdown_form.fields),
                          ("TableName", "FieldName", "ListItem", "Def", "Use"))
-        self.app.dropdown_form.variables["TableName"].set("HelpText")
-        self.app.dropdown_form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
-        self.root.update()
-        self.app.dropdown_form.variables["FieldName"].set("Update")
+        self.app.dropdown_form.variables["FieldName"].set("Color")
         self.app.dropdown_form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
-        self.app.dropdown_form.variables["ListItem"].set("Apply help changes")
+        self.app.dropdown_form.variables["ListItem"].set("Blue")
         self.app.dropdown_form.variables["Def"].set("Clear Default")
         self.app.dropdown_form.variables["Use"].set("Set Use")
         self.click(self.app.dropdown_page, "Add")
-        row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
+        row = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
         self.assertEqual((row["TableName"], row["FieldName"], row["ListItem"]),
-                         ("HelpText", "Update", "Apply help changes"))
+                         ("FabricPiece", "Color", "Blue"))
+        self.assertEqual(row["UserModified"], 1)
         self.assertEqual(self.app.dropdown_list.tree.item(str(row["ID"]), "values")[1:4],
-                         ("HelpText", "Update", "Apply help changes"))
+                         ("FabricPiece", "Color", "Blue"))
+        protected = next(row for row in self.db.dropdown_rows("Status", table_name="FabricPiece")
+                         if row["ListItem"] == "Available")
+        self.assertEqual(protected["UserModified"], 0)
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_choice("HelpText", "Update", "Apply help changes")
         expected_width = tkfont.nametofont("TkDefaultFont").measure("0" * 5) + 10
         for name in ("Def", "Use"):
             self.assertEqual(self.app.dropdown_list.tree.column(name, "width"), expected_width)
@@ -1018,13 +1118,29 @@ class ScreenTests(unittest.TestCase):
             self.assertFalse(self.app.dropdown_list.tree.column(name, "stretch"))
         self.click(self.app.dropdown_page, "Set Selection")
         form = self.app.dialog_forms[self.app.dialogs[-1]][0]
-        form.variables["SetName"].set("Help buttons")
+        form.variables["SetName"].set("Blue colors")
         self.click(self.app.dialogs[-1], "Save Current")
-        selection = self.db.sets("DropDown", ("HelpText", "Update"))
+        selection = self.db.sets("DropDown", ("FabricPiece", "Color"))
         self.assertEqual(len(selection), 1)
         self.assertEqual(self.db.set_members(
-            selection[0]["ID"], "DropDown", ("HelpText", "Update")), [row["ID"]])
-        self.assertEqual(self.db.sets("DropDown", ("FabricPiece", "Color")), [])
+            selection[0]["ID"], "DropDown", ("FabricPiece", "Color")), [row["ID"]])
+
+    def test_protected_default_change_requires_warning_confirmation(self):
+        warning = patch("quilting.ui.messagebox.showwarning").start()
+        self.app.open_dropdowns()
+        form = self.app.dropdown_form
+        form.variables["FieldName"].set("Status")
+        form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        retired = next(row for row in self.db.dropdown_rows(
+            "Status", table_name="FabricPiece") if row["ListItem"] == "Retired")
+        self.app.dropdown_list.tree.selection_set(str(retired["ID"]))
+        self.root.update()
+        form.variables["Def"].set("Set Default")
+        self.click(self.app.dropdown_page, "Update")
+        self.confirm.assert_called()
+        self.assertEqual(self.db.get_dropdown(retired["ID"])["Def"], 1)
+        warning.assert_called_once()
         self.errors.assert_not_called()
 
     def test_error_message_entry_has_scrollable_fields_and_readonly_id(self):

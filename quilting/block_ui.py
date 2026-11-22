@@ -24,7 +24,10 @@ class BlockScreenMixin:
         ttk.Label(self.block_page, text="Quilt Blocks", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
         entry = ttk.Frame(self.block_page, style="Entry.TFrame")
         entry.pack(fill="x")
-        self.block_form = Form(entry, BLOCK_FIELDS, columns=3, style="Entry.TFrame")
+        self.block_form = Form(
+            entry, BLOCK_FIELDS, columns=3, style="Entry.TFrame",
+            database=self.db, dropdown_scope="QuiltBlock",
+        )
         self.block_form.pack(fill="x")
         actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
@@ -142,7 +145,8 @@ class BlockScreenMixin:
     def block_filter(self):
         from .ui import Form
         window = self.dialog("Filter Quilt Blocks", "QuiltBlock Filter")
-        form = Form(window, BLOCK_FILTER_FIELDS, columns=1)
+        form = Form(window, BLOCK_FILTER_FIELDS, columns=1, database=self.db,
+                    dropdown_scope="QuiltBlock Filter")
         form.pack(fill="x")
         form.assign(self.block_state["filters"])
         self.watch_dialog(window, form)
@@ -237,7 +241,8 @@ class BlockScreenMixin:
             return
         self.block_form.assign(self.block_initial)
         window = self.dialog("Block Parts", "Block Parts")
-        form = Form(window, PART_FIELDS, columns=3, style="Entry.TFrame")
+        form = Form(window, PART_FIELDS, columns=3, style="Entry.TFrame",
+                    database=self.db, dropdown_scope="Block Parts")
         form.pack(fill="x")
         self.watch_dialog(window, form)
         controls = ttk.Frame(window, padding=4)
@@ -331,7 +336,7 @@ class BlockScreenMixin:
                   Field("PositionY", required=True, default="0"),
                   Field("Rotation", required=True, default="0"),
                   Field("Mirror", "choice", choices=("No", "Yes"), default="No"))
-        form = Form(window, fields, columns=3)
+        form = Form(window, fields, columns=3, database=self.db, dropdown_scope="Block Sketch")
         form.pack(fill="x")
         self.watch_dialog(window, form)
         status = ttk.Label(window)

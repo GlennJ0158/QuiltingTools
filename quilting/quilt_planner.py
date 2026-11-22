@@ -44,7 +44,8 @@ def plan_quilt(uses, mappings, sources):
         colors = {value.casefold() for value in mappings.get(item["color"], ())}
         candidates = []
         for index, stock in enumerate(stocks):
-            if stock["source"]["Color"].casefold() not in colors:
+            color = stock["source"]["Color"]
+            if not color or color.casefold() not in colors:
                 continue
             for free_index, (x, y, width, length) in enumerate(stock["free"]):
                 for rotated in (False, True):

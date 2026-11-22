@@ -49,8 +49,8 @@ def parse_block(values):
     return clean
 
 
-def parse_part(values):
-    clean = validate_fields(PART_FIELDS, values)
+def parse_part(values, choices=None):
+    clean = validate_fields(PART_FIELDS, values, choices)
     try:
         count = int(clean["NumberInBlock"])
         if str(count) != clean["NumberInBlock"] or not 1 <= count <= 1000:
