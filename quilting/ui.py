@@ -91,19 +91,26 @@ class Form(ttk.Frame):
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
                  memo_height=None, memo_width=None, memo_scrollbars=False,
-                 dropdown_scope="FabricPiece"):
+                 dropdown_scope="FabricPiece", wide_memos=(), allow_blank_choices=()):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
         self.dropdown_scope = dropdown_scope
-        self.variables, self.widgets = {}, {}
+        self.allow_blank_choices = allow_blank_choices
+        self.variables, self.widgets, self.labels = {}, {}, {}
         self.previous_choices = {}
         owner = self.winfo_toplevel().help_owner
         label_style = "Entry.TLabel" if style == "Entry.TFrame" else "TLabel"
         for index, field in enumerate(self.fields):
             row, pair = divmod(index, columns)
             column = pair * 2
-            label = ttk.Label(self, text=field.label, style=label_style)
+            if field.name in wide_memos and index == len(self.fields) - 1 and pair:
+                row += 1
+                column = 0
+            label_text = ("Top/Bottom Margin (in)" if dropdown_scope == "Quilt Backs"
+                          and field.name == "Margin" else field.label)
+            label = ttk.Label(self, text=label_text, style=label_style)
+            self.labels[field.name] = label
             label.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
             owner.attach_help(label, field.name)
             variable = tk.StringVar(master=self, value=field.default)
@@ -119,7 +126,7 @@ class Form(ttk.Frame):
                 if container is not None:
                     scroll = ttk.Scrollbar(container, orient="vertical", command=widget.yview)
                     widget.configure(yscrollcommand=scroll.set)
-                    widget.pack(side="left")
+                    widget.pack(side="left", fill="both", expand=field.name in wide_memos)
                     scroll.pack(side="left", fill="y")
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
@@ -128,7 +135,11 @@ class Form(ttk.Frame):
                                       state="readonly", width=field.width, justify="left")
             else:
                 widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
-            (container or widget).grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
+            wide = field.name in wide_memos
+            (container or widget).grid(row=row, column=column + 1,
+                                       columnspan=columns * 2 - column - 1
+                                       if wide and index == len(self.fields) - 1 else 1,
+                                       sticky="ew" if wide else "w", padx=(0, 20), pady=4)
             self.variables[field.name], self.widgets[field.name] = variable, widget
             owner.attach_help(widget, field.name)
             if database is not None and field.name in DROPDOWN_FIELDS and field.kind == "dropdown":
@@ -169,8 +180,10 @@ class Form(ttk.Frame):
 
     def choices(self, field):
         if self.uses_dropdown_list(field.name):
-            return self.database.dropdown_choices(field.name, self.dropdown_scope)
-        return field.choices
+            choices = self.database.dropdown_choices(field.name, self.dropdown_scope)
+        else:
+            choices = field.choices
+        return ("", *choices) if field.name in self.allow_blank_choices else choices
 
     def refresh_choices(self):
         if self.database is not None:
@@ -231,10 +244,11 @@ class Form(ttk.Frame):
 
 
 class RecordList(ttk.Frame):
-    def __init__(self, parent, columns, measurement_display=display_measurement):
+    def __init__(self, parent, columns, measurement_display=display_measurement, name_limit=None):
         super().__init__(parent, padding=(8, 0, 8, 8))
         self.columns = columns
         self.measurement_display = measurement_display
+        self.name_limit = name_limit
         self.heading = ttk.Label(self, text="", wraplength=1100)
         self.heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 3))
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
@@ -267,6 +281,14 @@ class RecordList(ttk.Frame):
         self.rowconfigure(1, weight=1)
         self.bind("<Configure>", lambda event: self.heading.configure(wraplength=max(1, event.width - 24)))
 
+    def compact_columns(self, name):
+        font = tkfont.nametofont("TkHeadingFont")
+        for column in self.columns:
+            sample = "M" * 25 if column == name else (
+                "0000-00-00 00:00" if column == "DateModified" else caption(column) + " 0000")
+            width = max(font.measure(caption(column)), font.measure(sample)) + 18
+            self.tree.column(column, width=width, minwidth=width, stretch=False)
+
     def fill(self, rows, noun, sort, context=""):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
@@ -275,6 +297,7 @@ class RecordList(ttk.Frame):
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
+                else str(row[name])[:25] if name == self.name_limit
                 else row[name] for name in self.columns
             ]
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
@@ -328,7 +351,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         ttk.Label(body, text=f"Database: {self.db.path}", padding=(8, 0, 8, 4)).pack(anchor="w")
         entry = ttk.Frame(body, style="Entry.TFrame")
         entry.pack(fill="x")
-        self.form = Form(entry, FABRIC_FIELDS, style="Entry.TFrame", database=self.db)
+        self.form = Form(entry, FABRIC_FIELDS, style="Entry.TFrame", database=self.db,
+                         memo_height=2, memo_scrollbars=True, wide_memos=("Notes",))
         self.form.pack(fill="x")
         self.details = ttk.Label(entry, text="New fabric rectangle", padding=(8, 4), style="Entry.TLabel")
         self.details.pack(anchor="w")
@@ -676,7 +700,13 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             window, fields, columns=1,
             database=None if errors else self.db,
             dropdown_scope="ErrorMessage Filter" if errors else "FabricPiece",
+            allow_blank_choices=() if errors else ("Color",),
         )
+        if not errors:
+            for minimum, maximum in (("MinimumWidth", "MaximumWidth"), ("MinimumLength", "MaximumLength")):
+                row = form.labels[minimum].grid_info()["row"]
+                form.labels[maximum].grid_configure(row=row, column=2)
+                form.widgets[maximum].grid_configure(row=row, column=3)
         form.pack(fill="both", expand=True)
         form.assign(self.error_filters if errors else self.filters)
         self.watch_dialog(window, form)
@@ -695,7 +725,12 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 (self.refresh_errors if errors else self.refresh)()
 
         self.button(actions, "Apply", apply)
-        self.button(actions, "Clear Fields", form.defaults)
+        def clear_fields():
+            form.defaults()
+            if not errors:
+                form.variables["Color"].set(form.placeholder("Color"))
+
+        self.button(actions, "Clear Fields", clear_fields)
         self.button(actions, "Cancel", window.destroy)
 
     def open_dropdowns(self):
@@ -1133,8 +1168,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.attach_help(id_label, "Column:ID")
         self.attach_help(id_field, "Column:ID")
         self.error_form = Form(
-            entry, ERROR_FIELDS, columns=3, style="Entry.TFrame", memo_height=3, memo_width=28,
-            memo_scrollbars=True,
+            entry, ERROR_FIELDS, columns=2, style="Entry.TFrame", memo_height=3, memo_width=28,
+            memo_scrollbars=True, wide_memos=("ErrorText", "LikelyCause", "Description"),
         )
         self.error_form.pack(fill="x")
         self.error_details = ttk.Label(entry, padding=4, style="Entry.TLabel")
@@ -1164,11 +1199,12 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
     def build_backs(self):
         entry = ttk.Frame(self.backs_page, style="Entry.TFrame")
         entry.pack(fill="x")
-        self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
+        self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=3, style="Entry.TFrame",
+                              dropdown_scope="Quilt Backs")
         self.back_form.pack(fill="x")
-        for column in range(1, 10, 2):
+        for column in range(1, 6, 2):
             self.back_form.columnconfigure(column, weight=0)
-        self.back_form.columnconfigure(10, weight=1)
+        self.back_form.columnconfigure(6, weight=1)
         self.back_initial = self.back_form.values()
         stock_actions = ttk.Frame(entry, padding=(8, 0), style="Entry.TFrame")
         stock_actions.pack(fill="x")
@@ -1203,7 +1239,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             rows=lambda: self.db.quilt_backs(
                 self.back_state["filters"], self.back_state["selected_ids"], self.back_state["sort"]),
         )
-        self.back_list = RecordList(self.backs_page, BACK_COLUMNS, display_back_measurement)
+        self.back_list = RecordList(self.backs_page, BACK_COLUMNS, display_back_measurement, name_limit="BackName")
+        self.back_list.compact_columns("BackName")
         self.back_list.tree.configure(height=3)
         self.back_list.pack(fill="both", expand=True)
         self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
@@ -1296,17 +1333,22 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         quilt_width = measurement(values["QuiltWidth"], "QuiltWidth")
         quilt_length = measurement(values["QuiltLength"], "QuiltLength")
         margin = nonnegative_measurement(values["Margin"], "Margin") if values["Margin"] else 0
+        side_margin = nonnegative_measurement(values["SideMargin"], "SideMargin") if values["SideMargin"] else 0
         seam_allowance = (
             nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
             if values["SeamAllowance"] else 0
         )
+        if margin > 10 * INCH or side_margin > 10 * INCH:
+            messagebox.showwarning(
+                "Large Margin", "A top/bottom or side margin exceeds 10 inches.", parent=self.root,
+            )
         pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.back_available_inventory()
         self.back_selected_id = None
         self.back_list.tree.selection_remove(self.back_list.tree.selection())
         self.back_confirm_button.state(["disabled"])
         self.back_assembled_button.state(["disabled"])
         self.back_layouts = generate_layouts(
-            pieces, quilt_width, quilt_length, margin, seam_allowance, self.back_palette,
+            pieces, quilt_width, quilt_length, margin, seam_allowance, self.back_palette, side_margin=side_margin,
         )
         self.back_candidates.fill([
             {
@@ -1419,6 +1461,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
             if values["SeamAllowance"] else 0,
             layout,
+            side_margin=nonnegative_measurement(values["SideMargin"], "SideMargin") if values["SideMargin"] else 0,
         )
         self.back_initial = self.back_form.values()
         self.refresh_backs(back_id)

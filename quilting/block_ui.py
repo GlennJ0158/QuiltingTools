@@ -62,11 +62,12 @@ class BlockScreenMixin:
                               ("Set Selection", self.block_sets), ("Sort", self.block_sort),
                               ("Reset Selection", self.block_reset), ("Refresh", self.refresh_blocks_safe)):
             self.button(tools, label, action)
-        self.block_list = RecordList(self.block_page, BLOCK_COLUMNS)
+        self.block_list = RecordList(self.block_page, BLOCK_COLUMNS, name_limit="BlockName")
         font = tkfont.nametofont("TkHeadingFont")
         for name in ("FinishedWidth", "FinishedLength", "Scale", "Status", "Revision"):
             width = font.measure(caption(name) + "00") + 12
             self.block_list.tree.column(name, width=width, minwidth=width, stretch=False)
+        self.block_list.compact_columns("BlockName")
         self.block_list.pack(fill="both", expand=True)
         self.block_list.tree.bind("<<TreeviewSelect>>", self.command(self.select_block))
         self.block_initial = self.block_form.values()

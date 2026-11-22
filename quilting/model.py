@@ -48,15 +48,17 @@ FABRIC_FIELDS = (
     Field("PrintDirection", "choice", True, PRINT_DIRECTIONS, default="Unknown"),
     Field("StorageLocation", "dropdown"),
     Field("Status", "choice", True, STATUSES, default="Available"),
-    Field("Notes", limit=4000, width=40),
+    Field("Notes", "memo", limit=4000, width=40),
 )
 FILTER_FIELDS = (
     Field("FabricName"),
-    Field("Color"),
+    Field("Color", "dropdown"),
     Field("PatternName"),
     Field("StorageLocation"),
     Field("MinimumWidth", "length", width=6),
+    Field("MaximumWidth", "length", width=6),
     Field("MinimumLength", "length", width=6),
+    Field("MaximumLength", "length", width=6),
     Field("Status", "choice", choices=("", *STATUSES)),
 )
 FABRIC_NAMES = tuple(field.name for field in FABRIC_FIELDS)

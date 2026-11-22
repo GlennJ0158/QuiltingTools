@@ -233,6 +233,7 @@ class HelpTextTests(unittest.TestCase):
             self.db.connection.execute(
                 "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
                 "WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("PRAGMA user_version = 7")
         self.db.close()
         with self.assertRaises(UpgradeRequired):

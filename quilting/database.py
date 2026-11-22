@@ -25,7 +25,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 BLOCK_SCHEMA = """
 CREATE TABLE QuiltBlock (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,7 +172,8 @@ CREATE TABLE QuiltBack (
     GrainConsistent INTEGER NOT NULL CHECK(GrainConsistent IN (0, 1)),
     Status TEXT NOT NULL CHECK(Status IN ('Draft', 'Cut', 'Assembled')),
     DateCreated TEXT NOT NULL,
-    DateModified TEXT NOT NULL
+    DateModified TEXT NOT NULL,
+    SideMargin INTEGER NOT NULL CHECK(SideMargin >= 0)
 );
 CREATE TABLE QuiltBackPanel (
     QuiltBackID INTEGER NOT NULL REFERENCES QuiltBack(ID) ON DELETE CASCADE,
@@ -276,7 +277,7 @@ TABLE_COLUMNS = {
     "QuiltBack": (
         "ID", "BackName", "QuiltWidth", "QuiltLength", "Margin", "SeamAllowance",
         "BackWidth", "BackLength", "LayoutDirection", "RatioTier", "GrainConsistent",
-        "Status", "DateCreated", "DateModified",
+        "Status", "DateCreated", "DateModified", "SideMargin",
     ),
     "QuiltBackPanel": (
         "QuiltBackID", "PanelNumber", "FabricPieceID", "SourceRevision", "FabricName",
@@ -393,6 +394,8 @@ class Database:
             columns = tuple(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
             if table == "Dropdown" and version < 11:
                 expected = expected[:-1]
+            if table == "QuiltBack" and version < 13:
+                expected = expected[:-1]
             if columns != expected:
                 raise FieldError("DatabaseFormat", "Database", detail=f"{table} has an unexpected schema.")
         if [row[0] for row in connection.execute("PRAGMA quick_check")] != ["ok"]:
@@ -454,6 +457,11 @@ class Database:
                 self._upgrade_fabric_nullability()
             if version < 12:
                 self._upgrade_back_panel_nullability()
+            if 6 <= version < 13:
+                self.connection.execute(
+                    "ALTER TABLE QuiltBack ADD COLUMN SideMargin INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(SideMargin >= 0)")
+                self.connection.execute("UPDATE QuiltBack SET SideMargin = Margin")
             self.connection.execute(
                 "DELETE FROM WorkingListMember WHERE SelectionSetID IN "
                 "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown') "
@@ -462,6 +470,8 @@ class Database:
             self.connection.execute("UPDATE Dropdown SET Def = 0 WHERE Use = 0")
             self._seed_system_dropdowns()
             self._seed_help()
+            if version < 13:
+                self._upgrade_margin_help()
             if version < 4:
                 self._seed_errors()
             self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -597,6 +607,25 @@ class Database:
             "ON CONFLICT(TableName, FieldName) DO NOTHING",
             ((screen, name, *pair) for (screen, name), pair in default_help().items()),
         )
+
+    def _upgrade_margin_help(self):
+        defaults = default_help()
+        screen_hover, screen_full = defaults["Quilt Backs", "ScreenHelp"]
+        previous_screen_full = screen_full.replace(
+            "Enter the quilt size, separate top/bottom and side overhang margins, and one seam allowance. ",
+            "Enter the quilt size, equal overhang margin and one seam allowance for the entire back. ",
+        )
+        for field, old_pair in (
+            ("ScreenHelp", (screen_hover, previous_screen_full)),
+            ("Margin", ("Set the same overhang on all four sides.",
+                        "Backing target width and length each add twice this value to the quilt dimensions.")),
+        ):
+            hover, full = defaults["Quilt Backs", field]
+            self.connection.execute(
+                "UPDATE HelpText SET HoverText=?, FullText=? WHERE TableName='Quilt Backs' "
+                "AND FieldName=? AND HoverText=? AND FullText=?",
+                (hover, full, field, *old_pair),
+            )
 
     def _seed_errors(self):
         for row in self.connection.execute("SELECT * FROM ErrorText ORDER BY ErrorTextID").fetchall():
@@ -1443,14 +1472,17 @@ class Database:
             )
         return piece_id
 
-    def save_back_draft(self, back_name, quilt_width, quilt_length, margin, seam_allowance, layout):
+    def save_back_draft(self, back_name, quilt_width, quilt_length, margin, seam_allowance, layout,
+                        *, side_margin=None):
+        if side_margin is None:
+            side_margin = margin
         name = validate_fields(
             (Field("BackName", required=True),), {"BackName": back_name},
         )["BackName"]
         if (not layout.panels or len(layout.panels) > MAX_PANELS or layout.ratio_tier < 0
                 or layout.direction not in ("single", "vertical", "horizontal")):
             raise FieldError("Required", "FabricPieceID")
-        if (layout.target_width != quilt_width + 2 * margin
+        if (layout.target_width != quilt_width + 2 * side_margin
                 or layout.target_length != quilt_length + 2 * margin
                 or layout.seam_allowance != seam_allowance):
             raise FieldError("Conflict", "QuiltBack")
@@ -1526,11 +1558,11 @@ class Database:
             cursor = self.connection.execute(
                 "INSERT INTO QuiltBack (BackName, QuiltWidth, QuiltLength, Margin, SeamAllowance, "
                 "BackWidth, BackLength, LayoutDirection, RatioTier, GrainConsistent, Status, "
-                "DateCreated, DateModified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?)",
+                "DateCreated, DateModified, SideMargin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?, ?)",
                 (name, quilt_width, quilt_length, margin, seam_allowance,
                  layout.target_width, layout.target_length,
                  "single" if len(layout.panels) == 1 else layout.direction,
-                 layout.ratio_tier, int(layout.grain_consistent), timestamp, timestamp),
+                 layout.ratio_tier, int(layout.grain_consistent), timestamp, timestamp, side_margin),
             )
             back_id = cursor.lastrowid
             self.connection.executemany(
@@ -1697,9 +1729,11 @@ class Database:
             if clean[name]:
                 clauses.append(f"instr(lower({name}), lower(?)) > 0")
                 args.append(clean[name])
-        for name, column in (("MinimumWidth", "UsableWidth"), ("MinimumLength", "UsableLength")):
+        for name, column, operator in (
+                ("MinimumWidth", "UsableWidth", ">="), ("MaximumWidth", "UsableWidth", "<="),
+                ("MinimumLength", "UsableLength", ">="), ("MaximumLength", "UsableLength", "<=")):
             if clean[name] is not None:
-                clauses.append(f"{column} >= ?")
+                clauses.append(f"{column} {operator} ?")
                 args.append(clean[name])
         if clean["Status"]:
             clauses.append("Status = ?")
