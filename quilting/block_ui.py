@@ -14,6 +14,24 @@ from .blocks import (
 from .model import Field, FieldError, UNITS_PER_INCH, caption, display_measurement, normalize_sort, validate_fields
 
 
+def draw_block_sketch(canvas, block, parts, placements):
+    scale = float(Decimal(block["Scale"]) / 100)
+    width = block["FinishedWidth"] / UNITS_PER_INCH * scale
+    length = block["FinishedLength"] / UNITS_PER_INCH * scale
+    canvas.delete("all")
+    factor = min((max(canvas.winfo_width(), 100) - 30) / width,
+                 (max(canvas.winfo_height(), 100) - 30) / length)
+    canvas.create_rectangle(15, 15, 15 + width * factor, 15 + length * factor, outline="black")
+    for placement in placements:
+        part = parts[placement["BlockPartID"]]
+        geom = placed_shape(part, placement, scale)
+        points = [coord for x, y in geom.exterior.coords for coord in (15 + x * factor, 15 + y * factor)]
+        canvas.create_polygon(*points, fill=part["PartColor"].lower(), outline="black")
+        center = geom.representative_point()
+        canvas.create_text(15 + center.x * factor, 15 + center.y * factor,
+                           text=f"{part['ID']}/{placement['Instance']}")
+
+
 class BlockScreenMixin:
     def build_blocks(self):
         from .ui import Form, RecordList
@@ -319,6 +337,11 @@ class BlockScreenMixin:
 
     def open_block_sketch(self):
         from .ui import Form
+        selected_ids = self.block_list.tree.selection()
+        if len(selected_ids) > 1:
+            if self.allow_block_discard():
+                self.open_block_comparison([int(item) for item in selected_ids])
+            return
         block_id = self.require_block()
         if not self.allow_block_discard():
             return
@@ -348,23 +371,12 @@ class BlockScreenMixin:
         last_placement = ""
 
         def draw():
-            canvas.delete("all")
-            factor = min((max(canvas.winfo_width(), 100) - 30) / width,
-                         (max(canvas.winfo_height(), 100) - 30) / length)
-            canvas.create_rectangle(15, 15, 15 + width * factor, 15 + length * factor, outline="black")
             parts = {p["ID"]: p for p in self.db.block_parts(block_id)}
             placements = self.db.block_placements(block_id)
+            draw_block_sketch(canvas, block, parts, placements)
             choices = {f"{parts[p['BlockPartID']]['PartName']} / part {p['BlockPartID']} / instance {p['Instance']}":
                        p for p in placements}
             form.widgets["Placement"].configure(values=tuple(choices))
-            for label, placement in choices.items():
-                part = parts[placement["BlockPartID"]]
-                geom = placed_shape(part, placement, scale)
-                points = [coord for x, y in geom.exterior.coords for coord in (15 + x * factor, 15 + y * factor)]
-                canvas.create_polygon(*points, fill=part["PartColor"].lower(), outline="black")
-                center = geom.representative_point()
-                canvas.create_text(15 + center.x * factor, 15 + center.y * factor,
-                                   text=f"{part['ID']}/{placement['Instance']}")
             issues = validate_layout(block, list(parts.values()), placements)
             status.configure(text="; ".join(issues) if issues else "Layout is valid.")
             return choices
@@ -483,6 +495,43 @@ class BlockScreenMixin:
         window.protocol("WM_DELETE_WINDOW", self.command(close))
         window.bind("<Escape>", lambda _: self.command(close)())
         draw()
+
+    def open_block_comparison(self, block_ids):
+        window = self.dialog("Compare Block Sketches", "Compare Block Sketches")
+        window.geometry("1000x700")
+        actions = ttk.Frame(window, padding=4)
+        actions.pack(side="bottom", fill="x")
+        self.button(actions, "Close", window.destroy)
+
+        container = ttk.Frame(window)
+        container.pack(fill="both", expand=True)
+        scroll = tk.Canvas(container, highlightthickness=0)
+        vertical = ttk.Scrollbar(container, orient="vertical", command=scroll.yview)
+        horizontal = ttk.Scrollbar(container, orient="horizontal", command=scroll.xview)
+        scroll.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        vertical.pack(side="right", fill="y")
+        horizontal.pack(side="bottom", fill="x")
+        scroll.pack(side="left", fill="both", expand=True)
+        cards = ttk.Frame(scroll, padding=4)
+        scroll.create_window(0, 0, window=cards, anchor="nw")
+        cards.bind("<Configure>", lambda _: scroll.configure(scrollregion=scroll.bbox("all")))
+
+        for index, block_id in enumerate(block_ids):
+            block = self.db.get_block(block_id)
+            parts = {part["ID"]: part for part in self.db.block_parts(block_id)}
+            placements = self.db.block_placements(block_id)
+            card = ttk.LabelFrame(
+                cards, text=f"{block['BlockName']} (ID {block_id}, revision {block['Revision']}, {block['Status']})",
+                padding=4)
+            card.grid(row=index // 3, column=index % 3, sticky="nw", padx=4, pady=4)
+            sketch = tk.Canvas(card, width=280, height=220, background="white")
+            sketch.pack()
+            self.attach_help(sketch, "BlockSketch")
+            sketch.bind("<Configure>", lambda _, c=sketch, b=block, p=parts, ps=placements:
+                        draw_block_sketch(c, b, p, ps))
+            issues = validate_layout(block, list(parts.values()), placements)
+            ttk.Label(card, text="; ".join(issues) if issues else "Layout is valid.",
+                      wraplength=280).pack(anchor="w")
 
     def approve_block(self):
         block_id = self.require_block()

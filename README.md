@@ -215,6 +215,9 @@ outward seam offset, not independently enlarged triangle sides. Curves and
 offsets are approximated as polygons (64 segments per quarter-circle); printed
 outlines are visual guides, not cutting templates. Print Sketch saves an HTML
 report at a new filename and opens the browser print dialog.
+To compare saved layouts side by side, highlight multiple block rows (Ctrl-click
+or Shift-click) and choose **Sketch**. Scroll to see additional blocks; close the
+comparison and select one block to edit its placements.
 
 **Approve** checks all instances, overlaps, gaps and overflow against the block
 rectangle before making the version immutable. The geometry check allows an area
