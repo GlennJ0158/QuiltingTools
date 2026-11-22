@@ -82,7 +82,9 @@ SCREEN_HELP = {
     "Quilt Backs": (
         "Plan, sketch and record rectangular quilt-back panels.",
         "Enter the quilt size, equal overhang margin and one seam allowance for the entire back. "
-        "Available rectangles follow the Fabric working list. Highlight specific rectangles, or leave "
+        "Available rectangles initially follow the Fabric working list. Use Named Selection applies "
+        "a saved Fabric selection or restores the Fabric working list; Select Highlighted restricts "
+        "the source list independently. Highlight specific rectangles, or leave "
         "none highlighted to use all listed available rectangles, and generate layouts up "
         "to twenty panels. A source may supply multiple panels when a nonoverlapping shelf cut fits. "
         "Ranked alternatives favor minimum panel sizes, consistent grain, fewer parts and smaller "
@@ -90,7 +92,13 @@ SCREEN_HELP = {
         "legend also shows its inventory color description. Saving a draft does not change inventory. "
         "Confirm Cuts asks the operator to report any reusable remainder; source retirement and "
         "remnant creation are committed together. The Saved Plans controls filter, select and sort "
-        "saved backs independently of fabric and candidate plans.",
+        "saved backs independently of fabric and candidate plans. Displayed measurements are rounded "
+        "to three decimal places; planning and printed plans retain exact stored precision.",
+    ),
+    "Quilt Backs Fabric Selection": (
+        "Choose the fabric source list for quilt backs.",
+        "Apply a saved Fabric selection, or choose Current Fabric working list to restore the "
+        "original source list. Only available pieces are shown; the Fabric screen is unchanged.",
     ),
     "Quilt Backs Filter": (
         "Filter saved quilt backs.",
@@ -432,6 +440,8 @@ BUTTON_HELP = {
     "Print Plan": ("Print the sketch and assembly legend.", "Save an HTML plan to a new filename; "
                    "the report includes target dimensions, seam allowance, panel cut sizes, colors and grain."),
     "Refresh Fabric": ("Reload available rectangles.", "Refresh the source list before generating or confirming a plan."),
+    "Use Named Selection": ("Choose a saved Fabric selection.", "Apply a saved Fabric selection "
+                            "or return to the current Fabric working list without changing it."),
     "Apply": ("Validate and apply this dialog's settings.", "Apply the current criteria or sort "
               "and close the dialog. Invalid input leaves the dialog open for correction."),
     "Clear Fields": ("Reset this dialog's input fields.", "Clear optional inputs and restore field "
@@ -470,11 +480,12 @@ SCREEN_FIELDS = {
     "Fabric": FABRIC_FIELDS,
     "Quilt Backs": (
         Field("BackName", required=True),
-        Field("QuiltWidth", "length", required=True),
-        Field("QuiltLength", "length", required=True),
-        Field("Margin", "length", default="4"),
-        Field("SeamAllowance", "length", default="1/2"),
+        Field("QuiltWidth", "length", required=True, width=8),
+        Field("QuiltLength", "length", required=True, width=8),
+        Field("Margin", "length", default="4", width=8),
+        Field("SeamAllowance", "length", default="1/2", width=8),
     ),
+    "Quilt Backs Fabric Selection": (Field("SavedSet"),),
     "Quilt Backs Filter": BACK_FILTER_FIELDS,
     "Quilt Backs Sort": tuple(field for index in range(1, len(BACK_COLUMNS) + 1) for field in (
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
@@ -532,8 +543,9 @@ SCREEN_BUTTONS = {
     "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Quilt Backs": ("Generate Plans", "Set Sketch Color", "Preview Sketch", "Save Draft",
-                    "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric",
+                    "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric", "Use Named Selection",
                     "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort"),
+    "Quilt Backs Fabric Selection": ("Apply", "Cancel"),
     "Quilt Backs Filter": ("Apply", "Clear Fields", "Cancel"),
     "Quilt Backs Sort": ("Apply", "Clear Fields", "Cancel"),
     "Quilt Backs Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
@@ -656,6 +668,10 @@ def default_help():
                                "to update or delete it. Update can ignore either flag.")
             if screen == "HelpText" and button == "Set Selection":
                 hover, full = "Save or recall a HelpText list snapshot.", SCREEN_HELP["HelpText Set"][1]
+            if screen == "Quilt Backs" and button == "Select Highlighted":
+                hover, full = ("Restrict the adjacent list to highlighted records.",
+                               "Restrict the source fabric list or saved plans list, according to "
+                               "which button is used. Neither changes the Fabric working list.")
             if screen == "ErrorMessage" and button in (
                     "Add", "Update", "Filter", "Sort", "Reset Selection", "Set Selection"):
                 hover, full = {

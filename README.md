@@ -153,7 +153,11 @@ Metric entry/conversion is not yet implemented.
 
 Open **Quilt Backs** to enter a name, quilt width/length, one equal overhang margin
 for all four sides, and one seam allowance used at every seam. The available
-fabric list follows the Fabric Inventory working selection and filters. Highlight
+fabric list initially follows the Fabric Inventory working selection and filters.
+**Use Named Selection** applies an existing Fabric selection locally, or restores
+the current Fabric working list; **Select Highlighted** restricts the source list
+to its highlighted rows. Neither changes the Fabric screen. Only available pieces
+are shown. Highlight
 rectangles to restrict a plan, or leave none highlighted to use all listed available
 rectangles. Optionally choose a controlled **Sketch Color** for each source,
 and choose **Generate Plans**. Color suggestions are derived from inventory text,
@@ -172,6 +176,11 @@ fewer panels, and smaller total source area. It only shows alternatives from the
 best feasible panel-size tier. The alternatives are compromises, not an automatic
 promise of minimum waste. This release does not search arbitrary unequal panels,
 T-joints, general two-dimensional nesting or layouts above 20 panels.
+The layout heading reports the number of candidates without a sort order.
+Quilt Backs list and cut-dialog measurements are rounded to three decimal places
+for display; entered values, stored data, calculations, and printed plans retain
+their full precision. Measurement controls are eight characters wide but do not
+limit the length of valid input.
 
 Preview the assembly sketch, then **Save Draft** and **Print Plan** as needed.
 Drafts retain source IDs/revisions and do not reserve or modify inventory. At

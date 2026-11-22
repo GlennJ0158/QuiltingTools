@@ -7,6 +7,7 @@ import traceback
 import tkinter as tk
 import webbrowser
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
@@ -71,6 +72,11 @@ class ToolTip:
 def display_timestamp(value):
     """Keep the date while displaying local time only to the minute."""
     return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def display_back_measurement(value):
+    rounded = (Decimal(value) / INCH).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    return format(rounded, "f").rstrip("0").rstrip(".") if rounded % 1 else str(int(rounded))
 
 
 def nonnegative_measurement(value, field):
@@ -225,9 +231,10 @@ class Form(ttk.Frame):
 
 
 class RecordList(ttk.Frame):
-    def __init__(self, parent, columns):
+    def __init__(self, parent, columns, measurement_display=display_measurement):
         super().__init__(parent, padding=(8, 0, 8, 8))
         self.columns = columns
+        self.measurement_display = measurement_display
         self.heading = ttk.Label(self, text="", wraplength=1100)
         self.heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 3))
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
@@ -264,15 +271,16 @@ class RecordList(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             values = [
-                display_measurement(row[name]) if name in (
+                self.measurement_display(row[name]) if name in (
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else row[name] for name in self.columns
             ]
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
-        order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort)
-        self.heading.configure(text=f"{len(rows)} {noun} selected; Sort: {order}{context}")
+        order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort) if sort else ""
+        self.heading.configure(text=f"{len(rows)} {noun} selected"
+                               + (f"; Sort: {order}" if order else "") + context)
 
 
 class Application(BlockScreenMixin, QuiltScreenMixin):
@@ -1158,13 +1166,18 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         entry.pack(fill="x")
         self.back_form = Form(entry, SCREEN_FIELDS["Quilt Backs"], columns=5, style="Entry.TFrame")
         self.back_form.pack(fill="x")
+        for column in range(1, 10, 2):
+            self.back_form.columnconfigure(column, weight=0)
+        self.back_form.columnconfigure(10, weight=1)
         self.back_initial = self.back_form.values()
         stock_actions = ttk.Frame(entry, padding=(8, 0), style="Entry.TFrame")
         stock_actions.pack(fill="x")
         ttk.Label(stock_actions, text="Available source rectangles", style="Entry.TLabel").pack(side="left", padx=(0, 10))
         self.button(stock_actions, "Set Sketch Color", self.set_back_palette)
         self.button(stock_actions, "Refresh Fabric", self.refresh_back_stock)
-        self.back_stock = RecordList(self.backs_page, LIST_COLUMNS)
+        self.button(stock_actions, "Use Named Selection", self.open_back_fabric_selection)
+        self.button(stock_actions, "Select Highlighted", self.select_back_fabric)
+        self.back_stock = RecordList(self.backs_page, LIST_COLUMNS, display_back_measurement)
         self.back_stock.tree.configure(height=5)
         self.back_stock.pack(fill="both", expand=True)
         actions = ttk.Frame(self.backs_page, padding=(8, 0))
@@ -1190,7 +1203,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             rows=lambda: self.db.quilt_backs(
                 self.back_state["filters"], self.back_state["selected_ids"], self.back_state["sort"]),
         )
-        self.back_list = RecordList(self.backs_page, BACK_COLUMNS)
+        self.back_list = RecordList(self.backs_page, BACK_COLUMNS, display_back_measurement)
         self.back_list.tree.configure(height=3)
         self.back_list.pack(fill="both", expand=True)
         self.back_list.tree.bind("<<TreeviewSelect>>", self.command(self.on_back_select))
@@ -1204,15 +1217,62 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_selected_layout = None
         self.back_selected_id = None
         self.back_palette = {}
+        self.back_fabric_ids = None
+        self.back_fabric_description = ""
         self.back_initial = self.back_form.values()
         self.refresh_back_stock()
+        self.back_candidates.fill([], "ranked layout plans", None)
         self.refresh_backs()
         self.back_confirm_button.state(["disabled"])
         self.back_assembled_button.state(["disabled"])
 
     def refresh_back_stock(self):
-        rows = self.available_inventory()
-        self.back_stock.fill(rows, "available fabric rectangles", self.sort)
+        rows = self.back_available_inventory()
+        context = f"; {self.back_fabric_description}" if self.back_fabric_description else ""
+        self.back_stock.fill(rows, "available fabric rectangles", self.sort, context)
+
+    def back_available_inventory(self):
+        if self.back_fabric_ids is None:
+            return self.available_inventory()
+        return [row for row in self.db.pieces(selected_ids=self.back_fabric_ids, sort=self.sort)
+                if row["Status"] == "Available"]
+
+    def select_back_fabric(self):
+        selected = self.back_stock.tree.selection()
+        if not selected:
+            raise FieldError("NoHighlight", "Fabric Inventory")
+        self.back_fabric_ids = [int(item) for item in selected]
+        self.back_fabric_description = "Highlighted-record restriction"
+        self.refresh_back_stock()
+
+    def open_back_fabric_selection(self):
+        sets = {
+            f"{row['SetName']} ({row['RecordCount']} records; ID {row['ID']})": row["ID"]
+            for row in self.db.sets("Fabric")
+        }
+        working_list = "Current Fabric working list"
+        fields = (Field("SavedSet", "choice", choices=(working_list, *sets), default=working_list),)
+        window = self.dialog("Choose Fabric Selection", "Quilt Backs Fabric Selection")
+        form = Form(window, fields, columns=1)
+        form.pack(fill="x")
+        self.watch_dialog(window, form)
+
+        def apply():
+            choice = validate_fields(fields, form.values())["SavedSet"]
+            if choice == working_list:
+                self.back_fabric_ids = None
+                self.back_fabric_description = ""
+            else:
+                set_id = sets[choice]
+                self.back_fabric_ids = self.db.set_members(set_id, "Fabric")
+                self.back_fabric_description = f"Selection set ID {set_id}"
+            window.destroy()
+            self.refresh_back_stock()
+
+        actions = ttk.Frame(window, padding=8)
+        actions.pack(fill="x")
+        self.button(actions, "Apply", apply)
+        self.button(actions, "Cancel", window.destroy)
 
     def available_inventory(self):
         return [row for row in self.db.pieces(self.filters, self.selected_ids, self.sort)
@@ -1240,7 +1300,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             nonnegative_measurement(values["SeamAllowance"], "SeamAllowance")
             if values["SeamAllowance"] else 0
         )
-        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.available_inventory()
+        pieces = [self.db.get_piece(int(piece_id)) for piece_id in selected] if selected else self.back_available_inventory()
         self.back_selected_id = None
         self.back_list.tree.selection_remove(self.back_list.tree.selection())
         self.back_confirm_button.state(["disabled"])
@@ -1262,7 +1322,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 "FabricArea": f"{layout.stock_area / (INCH * INCH):,.1f} sq in",
             }
             for index, layout in enumerate(self.back_layouts, 1)
-        ], "ranked layout plans", (("ID", "asc"),))
+        ], "ranked layout plans", None)
         self.back_selected_layout = self.back_layouts[0] if self.back_layouts else None
         if self.back_layouts:
             self.back_candidates.tree.selection_set("1")
@@ -1380,8 +1440,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_assembled_button.state(["!disabled"] if back["Status"] == "Cut" else ["disabled"])
         self.back_status.configure(
             text=f"Back {back['ID']}: {back['BackName']} — {back['Status']}; "
-                 f"{display_measurement(back['BackWidth'])} × "
-                 f"{display_measurement(back['BackLength'])} in.",
+                 f"{display_back_measurement(back['BackWidth'])} × "
+                 f"{display_back_measurement(back['BackLength'])} in.",
         )
 
     def open_back_cut(self):
@@ -1409,16 +1469,16 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         for source_id, panels in sources.items():
             panel = panels[0]
             planned = ", ".join(
-                f"Part {item['PanelNumber']}: {display_measurement(item['CutWidth'])} × "
-                f"{display_measurement(item['CutLength'])} in"
+                f"Part {item['PanelNumber']}: {display_back_measurement(item['CutWidth'])} × "
+                f"{display_back_measurement(item['CutLength'])} in"
                 for item in panels
             )
             ttk.Label(
                 window,
                 text=f"Source {source_id}: {panel['FabricName']} "
                      f"({panel['InventoryColor'] or 'no color recorded'}), "
-                     f"{display_measurement(panel['SourceWidth'])} × "
-                     f"{display_measurement(panel['SourceLength'])} in. Planned cuts: {planned}",
+                     f"{display_back_measurement(panel['SourceWidth'])} × "
+                     f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (rounded): {planned}",
                 padding=(8, 4),
             ).pack(anchor="w")
         form = Form(window, tuple(fields), columns=2)

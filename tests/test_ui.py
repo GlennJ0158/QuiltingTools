@@ -13,7 +13,7 @@ from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
 )
-from quilting.ui import Application, Form, RecordList, display_timestamp
+from quilting.ui import Application, Form, RecordList, display_back_measurement, display_timestamp
 from tests.test_inventory import fabric
 from tests.test_errors import error_values
 
@@ -277,6 +277,73 @@ class ScreenTests(unittest.TestCase):
         self.app.refresh_back_stock()
         self.assertEqual(set(self.app.back_stock.tree.get_children()), {str(first), str(second)})
 
+    def test_back_fabric_selection_is_independent_and_generation_uses_visible_sources(self):
+        first = self.add_piece(FabricName="First", UsableWidth="100", UsableLength="100")
+        second = self.add_piece(FabricName="Second", UsableWidth="100", UsableLength="100")
+        retired = self.db.save_piece(fabric(
+            FabricName="Retired", UsableWidth="100", UsableLength="100", Status="Retired",
+        ))
+        set_id = self.db.save_set("Sources", [first, second, retired])
+        self.app.selected_ids = [first]
+        self.app.show_screen("Quilt Backs")
+        actions = self.app.back_stock.master.winfo_children()[0]
+        stock_actions = next(w for w in descendants(actions)
+                             if isinstance(w, ttk.Button) and w.cget("text") == "Refresh Fabric").master
+        self.assertEqual([w.cget("text") for w in stock_actions.winfo_children()
+                          if isinstance(w, ttk.Button)][-3:],
+                         ["Refresh Fabric", "Use Named Selection", "Select Highlighted"])
+        self.click(stock_actions, "Use Named Selection")
+        dialog = self.app.dialogs[-1]
+        form = self.app.dialog_forms[dialog][0]
+        form.variables["SavedSet"].set(f"Sources (3 records; ID {set_id})")
+        self.click(dialog, "Apply")
+        self.assertEqual(set(self.app.back_stock.tree.get_children()), {str(first), str(second)})
+        with self.assertRaises(FieldError):
+            self.app.select_back_fabric()
+        self.app.back_stock.tree.selection_set(str(second))
+        self.click(stock_actions, "Select Highlighted")
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(second),))
+        self.assertEqual(self.app.selected_ids, [first])
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30.123456", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.generate_back_plans()
+        self.assertTrue(self.app.back_layouts)
+        self.assertTrue(all(panel.source_id == second for layout in self.app.back_layouts
+                            for panel in layout.panels))
+        self.app.save_back_draft()
+        self.assertEqual(self.db.get_quilt_back(self.app.back_selected_id)["QuiltWidth"], 30_123_456)
+        self.click(stock_actions, "Use Named Selection")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.app.back_stock.tree.get_children(), (str(first),))
+        self.assertEqual(self.app.selected_ids, [first])
+        self.errors.assert_not_called()
+
+    def test_back_layout_count_compact_fields_and_rounded_display(self):
+        source = self.add_piece(FabricName="Precise", UsableWidth="100.123456", UsableLength="100")
+        self.app.show_screen("Quilt Backs")
+        self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
+        for name in ("QuiltWidth", "QuiltLength", "Margin", "SeamAllowance"):
+            self.assertEqual(int(self.app.back_form.widgets[name].cget("width")), 8)
+        self.assertEqual(self.app.back_form.grid_columnconfigure(1)["weight"], 0)
+        values = self.app.back_stock.tree.item(str(source), "values")
+        self.assertEqual(values[LIST_COLUMNS.index("UsableWidth")], "100.123")
+        self.app.back_form.assign({
+            "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
+            "Margin": "0", "SeamAllowance": "1",
+        })
+        self.app.generate_back_plans()
+        self.assertEqual(self.app.back_candidates.heading.cget("text"),
+                         f"{len(self.app.back_layouts)} ranked layout plans selected")
+        self.app.back_form.variables["QuiltWidth"].set("1000")
+        self.app.generate_back_plans()
+        self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
+        self.assertEqual(self.db.get_piece(source)["UsableWidth"], 100_123_456)
+        self.assertEqual(display_back_measurement(15_625), "0.016")
+        self.assertEqual(display_back_measurement(1_234_500), "1.235")
+        self.assertEqual(display_back_measurement(10_800_000_000), "10800")
+
     def test_quilt_back_saved_plans_have_isolated_ordered_working_list_tools(self):
         source_id = self.add_piece(
             FabricName="Backing", UsableWidth="100", UsableLength="100",
@@ -298,7 +365,7 @@ class ScreenTests(unittest.TestCase):
 
         labels = [widget.cget("text") for widget in descendants(self.app.backs_page)
                   if isinstance(widget, ttk.Button)]
-        start = labels.index("Select Highlighted")
+        start = len(labels) - 1 - labels[::-1].index("Select Highlighted")
         self.assertEqual(labels[start:start + 5], [
             "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
         ])
@@ -314,7 +381,9 @@ class ScreenTests(unittest.TestCase):
         self.click(self.app.backs_page, "Reset Selection")
         back_b = next(row["ID"] for row in self.db.quilt_backs() if row["BackName"] == "Back B")
         self.app.back_list.tree.selection_set(str(back_b))
-        self.click(self.app.backs_page, "Select Highlighted")
+        saved_tools = next(w for w in descendants(self.app.backs_page)
+                           if isinstance(w, ttk.Button) and w.cget("text") == "Filter").master
+        self.click(saved_tools, "Select Highlighted")
         self.assertEqual(self.app.back_list.tree.get_children(), (str(back_b),))
         self.assertEqual(self.app.back_stock.tree.get_children(), (str(source_id),))
         self.assertEqual(self.app.back_candidates.tree.get_children(), candidate_ids)
