@@ -8,7 +8,7 @@ from unittest.mock import patch
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.errors import ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES
 from quilting.model import FieldError
-from tests.test_inventory import fabric
+from tests.test_inventory import assert_legacy_rows_preserved, downgrade_dropdown_schema, fabric
 
 
 def error_values(**overrides):
@@ -155,6 +155,7 @@ class ErrorMessageTests(unittest.TestCase):
             for table in ("WorkingListMember", "WorkingListSet",
                           "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
+            downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 3")
         tables = ("FabricPiece", "FabricHistory", "SelectionSet", "SelectionMember",
                   "ErrorText", "Dropdown", "HelpText", "ScreenState")
@@ -171,8 +172,7 @@ class ErrorMessageTests(unittest.TestCase):
         self.assertEqual(original, self.path.read_bytes())
         self.db = Database(self.path, upgrade=True)
         for table, rows in before.items():
-            after = [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")]
-            self.assertEqual(after, rows, table)
+            assert_legacy_rows_preserved(self, self.db, table, rows)
         self.assertTrue(self.db.error_rows())
         self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         with sqlite3.connect(self.db.upgrade_backup) as backup:

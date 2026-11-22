@@ -140,7 +140,7 @@ def display_measurement(value):
     return format(Decimal(value) / UNITS_PER_INCH, "f").rstrip("0").rstrip(".")
 
 
-def validate_fields(fields, values):
+def validate_fields(fields, values, choices=None):
     expected = {field.name for field in fields}
     if set(values) != expected:
         detail = f"missing {sorted(expected - set(values))}; unknown {sorted(set(values) - expected)}"
@@ -158,7 +158,8 @@ def validate_fields(fields, values):
         if field.kind == "length":
             result[field.name] = measurement(value, field.name) if value else None
         elif field.kind == "choice":
-            if value not in field.choices:
+            allowed = (choices or {}).get(field.name, field.choices)
+            if value and value not in allowed:
                 raise FieldError("Choice", field.name)
             result[field.name] = value
         else:

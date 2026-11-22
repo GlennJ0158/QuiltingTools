@@ -6,6 +6,7 @@ from pathlib import Path
 from quilting.blocks import cutting_shape, finished_shape, parse_part, validate_layout
 from quilting.database import Database, UpgradeRequired
 from quilting.model import FieldError
+from tests.test_inventory import downgrade_dropdown_schema
 
 
 def block(**overrides):
@@ -126,6 +127,7 @@ class BlockTests(unittest.TestCase):
             for name in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {name}")
+            downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -136,16 +138,30 @@ class BlockTests(unittest.TestCase):
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 6)
         self.assertEqual(self.db.blocks(), [])
 
-    def test_upgrade_v8_preserves_generalized_dropdown_sets(self):
-        self.db.add_dropdown_choice("HelpText", "Update", "Apply")
-        row = self.db.dropdown_rows("Update", table_name="HelpText")[0]
-        set_id = self.db.save_set("Help actions", [row["ID"]], "DropDown", ("HelpText", "Update"))
+    def test_upgrade_v8_preserves_supported_dropdown_sets(self):
+        self.db.add_dropdown_choice("FabricPiece", "Color", "Blue")
+        row = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
+        set_id = self.db.save_set("Fabric colors", [row["ID"]], "DropDown", ("FabricPiece", "Color"))
         with self.db.connection:
             for name in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {name}")
+            self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
+            self.db.connection.execute("""
+                CREATE TABLE Dropdown (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT, TableName TEXT NOT NULL,
+                    FieldName TEXT NOT NULL, ListItem TEXT NOT NULL COLLATE NOCASE,
+                    Def INTEGER NOT NULL DEFAULT 0, Use INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(TableName, FieldName, ListItem))
+            """)
+            self.db.connection.execute(
+                "INSERT INTO Dropdown (ID, TableName, FieldName, ListItem, Def, Use) "
+                "SELECT ID, TableName, FieldName, ListItem, Def, Use FROM DropdownCurrent")
+            self.db.connection.execute("DROP TABLE DropdownCurrent")
             self.db.connection.execute("PRAGMA user_version=8")
         self.db.close()
         self.db = Database(self.path, upgrade=True)
-        self.assertEqual(self.db.set_members(set_id, "DropDown", ("HelpText", "Update")), [row["ID"]])
+        self.assertEqual(self.db.set_members(set_id, "DropDown", ("FabricPiece", "Color")), [row["ID"]])
+        with self.assertRaises(FieldError):
+            self.db.dropdown_rows("Update", table_name="HelpText")
         self.assertEqual(self.db.blocks(), [])

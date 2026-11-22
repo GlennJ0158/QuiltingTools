@@ -84,10 +84,12 @@ class Form(ttk.Frame):
     """All editable controls are declared and read through one verified registry."""
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
-                 memo_height=None, memo_width=None, memo_scrollbars=False):
+                 memo_height=None, memo_width=None, memo_scrollbars=False,
+                 dropdown_scope="FabricPiece"):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
+        self.dropdown_scope = dropdown_scope
         self.variables, self.widgets = {}, {}
         self.previous_choices = {}
         owner = self.winfo_toplevel().help_owner
@@ -116,14 +118,14 @@ class Form(ttk.Frame):
                 variable.trace_add("write", lambda *_, name=field.name: self.assign_text(name))
                 widget.bind("<<Modified>>", lambda event, name=field.name: self.read_text(name))
             elif field.kind in ("choice", "dropdown"):
-                widget = ttk.Combobox(self, textvariable=variable, values=field.choices,
+                widget = ttk.Combobox(self, textvariable=variable, values=self.choices(field),
                                       state="readonly", width=field.width, justify="left")
             else:
                 widget = ttk.Entry(self, textvariable=variable, width=field.width, justify="left")
             (container or widget).grid(row=row, column=column + 1, sticky="w", padx=(0, 20), pady=4)
             self.variables[field.name], self.widgets[field.name] = variable, widget
             owner.attach_help(widget, field.name)
-            if database is not None and field.name in DROPDOWN_FIELDS:
+            if database is not None and field.name in DROPDOWN_FIELDS and field.kind == "dropdown":
                 widget.bind("<<ComboboxSelected>>", lambda event, name=field.name: self.choose_item(name))
                 variable.trace_add("write", lambda *_, name=field.name: self.remember_choice(name))
             self.columnconfigure(column + 1, weight=1)
@@ -148,19 +150,32 @@ class Form(ttk.Frame):
 
     def remember_choice(self, name):
         value = self.variables[name].get()
-        if value != ADD_ITEM:
+        if value != ADD_ITEM and value != self.placeholder(name):
             self.previous_choices[name] = value
+
+    def placeholder(self, name):
+        return f"Choose {name}"
+
+    def uses_dropdown_list(self, name):
+        field = next(field for field in self.fields if field.name == name)
+        return (field.kind in ("choice", "dropdown") and self.database is not None
+                and self.database.has_dropdown_list(self.dropdown_scope, name))
+
+    def choices(self, field):
+        if self.uses_dropdown_list(field.name):
+            return self.database.dropdown_choices(field.name, self.dropdown_scope)
+        return field.choices
 
     def refresh_choices(self):
         if self.database is not None:
-            for name in self.variables:
-                if name in DROPDOWN_FIELDS:
-                    self.widgets[name].configure(values=self.database.dropdown_choices(name))
+            for field in self.fields:
+                if self.uses_dropdown_list(field.name):
+                    self.widgets[field.name].configure(values=self.choices(field))
 
     def choose_item(self, name):
         if self.variables[name].get() != ADD_ITEM:
             return
-        previous = self.previous_choices.get(name, "")
+        previous = self.previous_choices.get(name, self.placeholder(name))
         # Never leave the action sentinel in an inventory form, including after Cancel or an error.
         self.variables[name].set(previous)
         self.winfo_toplevel().help_owner.open_add_item(self, name)
@@ -180,7 +195,11 @@ class Form(ttk.Frame):
         for field in self.fields:
             if field.kind == "memo":
                 self.read_text(field.name)
-        return {name: variable.get() for name, variable in self.variables.items()}
+        return {
+            name: "" if self.uses_dropdown_list(name) and variable.get() == self.placeholder(name)
+            else variable.get()
+            for name, variable in self.variables.items()
+        }
 
     def assign(self, values):
         self.assert_bindings()
@@ -188,12 +207,15 @@ class Form(ttk.Frame):
         if set(values) != set(self.variables):
             raise FieldError("Binding", "Form", detail="loaded values do not match the form fields")
         for name, value in values.items():
+            field = next(field for field in self.fields if field.name == name)
+            if value is None or value == "":
+                value = self.placeholder(name) if self.uses_dropdown_list(name) else ""
             self.variables[name].set(value)
 
     def defaults(self):
         self.assign({
-            field.name: self.database.dropdown_default(field.name)
-            if self.database is not None and field.name in DROPDOWN_FIELDS else field.default
+            field.name: self.database.dropdown_default(field.name, self.dropdown_scope)
+            if self.uses_dropdown_list(field.name) else field.default
             for field in self.fields
         })
 
@@ -616,7 +638,10 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             fields = self.working_list_fields(screen)
             title = f"Filter {screen}"
             window = self.dialog(title, f"{screen} Filter")
-            form = Form(window, fields, columns=1)
+            form = Form(
+                window, fields, columns=1, database=self.db,
+                dropdown_scope=f"{screen} Filter",
+            )
             form.pack(fill="both", expand=True)
             form.assign(state["filters"])
             self.watch_dialog(window, form)
@@ -639,7 +664,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         fields = ERROR_FILTER_FIELDS if errors else FILTER_FIELDS
         window = self.dialog("Filter Error Messages" if errors else "Filter Fabric Inventory",
                              "Error Filter" if errors else "Filter")
-        form = Form(window, fields, columns=1)
+        form = Form(
+            window, fields, columns=1,
+            database=None if errors else self.db,
+            dropdown_scope="ErrorMessage Filter" if errors else "FabricPiece",
+        )
         form.pack(fill="both", expand=True)
         form.assign(self.error_filters if errors else self.filters)
         self.watch_dialog(window, form)
@@ -666,16 +695,36 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def open_add_item(self, source, name):
         window = self.dialog(f"Add Item - {caption(name)}", "Add Item")
-        form = Form(window, (Field("ListItem", required=True),), columns=1)
+        form = Form(window, (Field("ListItem", required=True),
+                             Field("Def", "choice", choices=("Clear Default", "Set Default"),
+                                   default="Clear Default")), columns=1)
         form.pack(fill="x")
         self.watch_dialog(window, form)
 
         def add():
-            item = validate_fields(form.fields, form.values())["ListItem"]
-            stored = self.db.add_dropdown_item(name, item)
+            values = validate_fields(form.fields, form.values())
+            item = values["ListItem"]
+            set_default = values["Def"] == "Set Default"
+            clear_others = False
+            if set_default and self.db.other_dropdown_defaults("FabricPiece", name, item_value=item):
+                decision = messagebox.askyesnocancel(
+                    "Existing Defaults", "Clear the other defaults for this list?",
+                    parent=window,
+                )
+                if decision is None:
+                    return
+                clear_others = decision
+            stored = self.db.add_dropdown_item(name, item, set_default, clear_others)
             source.refresh_choices()
             source.variables[name].set(stored)
             window.destroy()
+            if set_default and sum(row["Def"] for row in self.db.dropdown_rows(
+                    name, include_inactive=True)) > 1:
+                messagebox.showwarning(
+                    "Multiple Defaults", "This list has more than one default. "
+                    "Only the first active default encountered is used; clear the others.",
+                    parent=self.root,
+                )
 
         actions = ttk.Frame(window, padding=8)
         actions.pack(fill="x")
@@ -930,15 +979,34 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             raise FieldError("Choice", "Def")
         if values["Use"] not in ("", "Set Use", "Clear Use", "Ignore for Update"):
             raise FieldError("Choice", "Use")
+        clear_others = False
+        if (item_id is not None and values["Def"] not in ("", "Ignore for Update")
+                and flags[values["Def"]] != self.dropdown_row["Def"]
+                and not self.dropdown_row["UserModified"]):
+            if not messagebox.askyesno(
+                    "Protected Default",
+                    "Changing this system-list default may change internal program operations or assumptions. "
+                    "Continue?",
+                    parent=self.root,
+            ):
+                return
+        if values["Def"] == "Set Default" and self.db.other_dropdown_defaults(
+                table_name, field_name, item_id=item_id):
+            decision = messagebox.askyesnocancel(
+                "Existing Defaults", "Clear the other defaults for this list?", parent=self.root,
+            )
+            if decision is None:
+                return
+            clear_others = decision
         _, warning = self.db.save_dropdown(
             table_name, field_name, values["ListItem"], flags[values["Def"]], flags[values["Use"]],
-            item_id, self.dropdown_row if item_id is not None else None,
+            item_id, self.dropdown_row if item_id is not None else None, clear_others,
         )
         self.refresh_dropdowns()
         if warning:
             messagebox.showwarning(
                 "Multiple Defaults", "This list has more than one default. "
-                "Only the first active default alphabetically is used; clear the others.",
+                "Only the first active default encountered is used; clear the others.",
                 parent=self.root,
             )
 

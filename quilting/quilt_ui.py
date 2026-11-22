@@ -32,7 +32,8 @@ class QuiltScreenMixin:
         self.quilt_form = Form(entry, (
             Field("ApprovedBlock", "choice"), Field("Quantity", default="1"),
             Field("PartColor", "choice", choices=COLORS),
-            Field("InventoryColor", "choice")), columns=2, style="Entry.TFrame")
+            Field("InventoryColor", "choice")), columns=2, style="Entry.TFrame",
+            database=self.db, dropdown_scope="Quilt")
         self.quilt_form.pack(fill="x")
         actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
@@ -51,9 +52,11 @@ class QuiltScreenMixin:
         self.attach_help(self.quilt_plan_choice, "SavedQuiltPlan")
         self.quilt_plan_choice.bind("<<ComboboxSelected>>", self.command(self.open_quilt_plan))
         ttk.Label(report_bar, text="Print format").pack(side="left")
-        self.quilt_report_format = ttk.Combobox(report_bar, state="readonly", width=14,
-                                                values=("Entire Quilt", "By Block"))
-        self.quilt_report_format.set("Entire Quilt")
+        self.quilt_report_format = ttk.Combobox(
+            report_bar, state="readonly", width=14,
+            values=self.db.dropdown_choices("QuiltReportFormat", "Quilt"),
+        )
+        self.quilt_report_format.set(self.db.dropdown_default("QuiltReportFormat", "Quilt") or "")
         self.quilt_report_format.pack(side="left", padx=8)
         self.attach_help(self.quilt_report_format, "QuiltReportFormat")
         from tkinter import Text
@@ -80,8 +83,7 @@ class QuiltScreenMixin:
             for row in self.db.blocks() if row["Status"] == "Approved"
         }
         self.quilt_form.widgets["ApprovedBlock"].configure(values=tuple(self.approved_blocks))
-        self.quilt_form.widgets["InventoryColor"].configure(
-            values=tuple(row["ListItem"] for row in self.db.dropdown_rows("Color") if row["ListItem"]))
+        self.quilt_form.widgets["InventoryColor"].configure(values=self.db.fabric_colors())
 
     def add_quilt(self):
         name = self.quilt_name_form.values()["QuiltName"]

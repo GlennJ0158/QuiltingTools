@@ -19,6 +19,41 @@ def fabric(**overrides):
     return values
 
 
+def downgrade_dropdown_schema(connection, generalized=False):
+    connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
+    connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
+    table_check = "" if generalized else " CHECK(TableName = 'FabricPiece')"
+    connection.execute(f"""
+        CREATE TABLE Dropdown (
+            ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            TableName TEXT NOT NULL{table_check},
+            FieldName TEXT NOT NULL,
+            ListItem TEXT NOT NULL COLLATE NOCASE,
+            Def INTEGER NOT NULL DEFAULT 0 CHECK(Def IN (0, 1)),
+            Use INTEGER NOT NULL DEFAULT 1 CHECK(Use IN (0, 1)),
+            UNIQUE(TableName, FieldName, ListItem)
+        )
+    """)
+    connection.execute(
+        "INSERT INTO Dropdown (ID, TableName, FieldName, ListItem, Def, Use) "
+        "SELECT ID, TableName, FieldName, ListItem, Def, Use FROM DropdownCurrent "
+        + ("" if generalized else "WHERE TableName = 'FabricPiece'")
+    )
+    connection.execute("DROP TABLE DropdownCurrent")
+
+
+def assert_legacy_rows_preserved(test_case, database, table, rows):
+    actual = [tuple(row) for row in database.connection.execute(f"SELECT * FROM {table}")]
+    if table == "Dropdown":
+        by_id = {row[0]: row for row in actual}
+        for row in rows:
+            test_case.assertEqual(by_id[row[0]][:len(row)], row)
+        test_case.assertTrue(any(row["UserModified"] == 0
+                                 for row in database.dropdown_rows("Status", table_name="FabricPiece")))
+    else:
+        test_case.assertEqual(actual, rows, table)
+
+
 class MeasurementTests(unittest.TestCase):
     def test_exact_fraction_and_decimal_round_trips(self):
         for value in ("42", "42 1/2", "1/64", "42.125", "0.000001", "0.123456", "10800"):
@@ -185,7 +220,7 @@ class DatabaseTests(unittest.TestCase):
         Database.restore_to_new(backup, restored)
         copy = Database(restored)
         try:
-            self.assertEqual(copy.get_piece(piece_id)["Color"], "")
+            self.assertIsNone(copy.get_piece(piece_id)["Color"])
             self.assertEqual(copy.set_members(set_id), [piece_id])
             self.assertEqual(len(copy.history(piece_id)), 1)
             self.assertGreater(copy.save_piece(fabric()), piece_id)
@@ -227,7 +262,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.add_dropdown_item("Color", value)
         default = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "blue")
         self.db.set_dropdown_default(default["ID"])
-        self.assertEqual(self.db.dropdown_choices("Color"), ("blue", ADD_ITEM, "", "Amber", "Yellow"))
+        self.assertEqual(self.db.dropdown_choices("Color"), ("blue", ADD_ITEM, "Amber", "Yellow"))
         self.assertEqual(self.db.add_dropdown_item("Color", " BLUE "), "blue")
         piece_id = self.db.save_piece(fabric(Color="BLUE"))
         self.assertEqual(self.db.get_piece(piece_id)["Color"], "blue")
@@ -246,14 +281,84 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.add_dropdown_item("Notes", "Not a dropdown")
 
+    def test_optional_dropdown_fields_store_null_and_required_name_rejects_placeholder(self):
+        piece_id = self.db.save_piece(fabric(Color="", PatternName=None, StorageLocation=""))
+        row = self.db.get_piece(piece_id)
+        self.assertIsNone(row["Color"])
+        self.assertIsNone(row["PatternName"])
+        self.assertIsNone(row["StorageLocation"])
+        with self.assertRaises(FieldError):
+            self.db.save_piece(fabric(FabricName=""))
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM,))
+        self.assertIsNone(self.db.dropdown_default("Color"))
+
+    def test_protected_list_allows_only_default_changes_and_runtime_help_keeps_policy(self):
+        available = next(row for row in self.db.dropdown_rows(
+            "Status", table_name="FabricPiece") if row["ListItem"] == "Available")
+        retired = next(row for row in self.db.dropdown_rows(
+            "Status", table_name="FabricPiece") if row["ListItem"] == "Retired")
+        self.assertEqual((available["UserModified"], retired["UserModified"]), (0, 0))
+        with self.assertRaises(FieldError):
+            self.db.add_dropdown_choice("FabricPiece", "Status", "Paused")
+        with self.assertRaises(FieldError):
+            self.db.save_dropdown("FabricPiece", "Status", "Renamed", None, None,
+                                  available["ID"], available)
+        with self.assertRaises(FieldError):
+            self.db.save_dropdown("FabricPiece", "Status", "Available", None, 0,
+                                  available["ID"], available)
+        with self.assertRaises(FieldError):
+            self.db.delete_dropdown(available["ID"], available)
+        _, warning = self.db.save_dropdown(
+            "FabricPiece", "Status", "Retired", 1, None, retired["ID"], retired,
+        )
+        self.assertTrue(warning)
+        self.assertEqual(self.db.dropdown_default("Status"), "Available")
+        protected_help = self.db.help_pair("Fabric", "Status")[1]
+        self.assertIn(
+            "This is a system-generated protected list. The values are used in internal program logic "
+            "and changing values can interfere with program operation. The user may change the default "
+            "value using the DropDown system.",
+            protected_help,
+        )
+        dynamic_help = self.db.help_pair("Quilt", "InventoryColor")[1]
+        self.assertIn(
+            "This is a dynamic list whose values come directly from the data. "
+            "This list does not use the DropDown system for setting or updating values.",
+            dynamic_help,
+        )
+        with self.assertRaises(FieldError):
+            self.db.dropdown_rows("InventoryColor", table_name="Quilt")
+
+    def test_add_item_replaces_defaults_atomically_and_only_in_its_list(self):
+        blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, 1)
+        name_default = self.db.dropdown_default("FabricName")
+        self.assertEqual(self.db.add_dropdown_item("Color", "Sage", True, True), "Sage")
+        rows = self.db.dropdown_rows("Color", include_inactive=True)
+        self.assertEqual([row["ListItem"] for row in rows if row["Def"]], ["Sage"])
+        self.assertEqual(self.db.get_dropdown(blue)["Use"], 1)
+        self.assertEqual(self.db.dropdown_default("FabricName"), name_default)
+        with self.db.connection:
+            self.db.connection.execute(
+                "CREATE TRIGGER reject_default BEFORE UPDATE OF Def ON Dropdown "
+                "WHEN NEW.ListItem = 'Red' AND NEW.Def = 1 "
+                "BEGIN SELECT RAISE(ABORT, 'rejected'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.add_dropdown_item("Color", "Red", True, True)
+        self.assertEqual(self.db.dropdown_default("Color"), "Sage")
+        self.assertNotIn("Red", [row["ListItem"] for row in self.db.dropdown_rows("Color")])
+        with self.db.connection:
+            self.db.connection.execute(
+                "CREATE TRIGGER reject_insert BEFORE INSERT ON Dropdown "
+                "WHEN NEW.ListItem = 'Red' AND NEW.Def = 1 "
+                "BEGIN SELECT RAISE(ABORT, 'rejected'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.save_dropdown("FabricPiece", "Color", "Red", 1, 1, clear_other_defaults=True)
+        self.assertEqual(self.db.dropdown_default("Color"), "Sage")
+
     def test_dropdown_flags_defaults_and_selection_cleanup(self):
         self.assertEqual(self.db.add_dropdown_choice("FabricPiece", "Color", "Sage"), "Sage")
-        seed = next(row for row in self.db.dropdown_rows("FabricName") if row["ListItem"] == "")
-        self.db.save_dropdown("FabricPiece", "FabricName", "", 0, None, seed["ID"], seed)
         sage = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Sage")
         self.db.delete_dropdown(sage["ID"], sage)
-        blank = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "")
-        self.db.save_dropdown("FabricPiece", "Color", "", 0, None, blank["ID"], blank)
         amber, warning = self.db.save_dropdown("FabricPiece", "Color", "Amber", 0, 1)
         self.assertFalse(warning)
         blue, warning = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, 1)
@@ -263,7 +368,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertTrue(warning)
         self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
         self.assertEqual(self.db.dropdown_default("Color"), "Amber")
-        self.assertEqual(self.db.dropdown_choices("Color"), ("Amber", ADD_ITEM, "", "Blue"))
+        self.assertEqual(self.db.dropdown_choices("Color"), ("Amber", ADD_ITEM, "Blue"))
         row = self.db.get_dropdown(amber)
         self.db.save_dropdown("FabricPiece", "Color", "", None, 0, amber, row)
         self.assertEqual(self.db.dropdown_default("Color"), "Blue")
@@ -272,9 +377,9 @@ class DatabaseTests(unittest.TestCase):
         self.db.save_piece(fabric(Color="Amber"))
         self.assertEqual(self.db.get_dropdown(amber)["Use"], 0)
         row = self.db.get_dropdown(blue)
-        self.db.save_dropdown("FabricPiece", "Color", "", 0, None, blue, row)
-        self.assertEqual(self.db.dropdown_default("Color"), "")
-        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM, "", "Blue"))
+        self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, None, blue, row)
+        self.assertIsNone(self.db.dropdown_default("Color"))
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM, "Blue"))
         set_id = self.db.save_set("Inactive", [amber], "DropDown", "Color")
         with self.assertRaises(FieldError):
             self.db.delete_dropdown(amber, amber_row)
@@ -285,7 +390,6 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
         self.db.delete_dropdown(blue, self.db.get_dropdown(blue))
-        self.db.delete_dropdown(blank["ID"], self.db.get_dropdown(blank["ID"]))
         self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM,))
 
     def test_version_nine_upgrade_removes_default_index_and_preserves_rows(self):
@@ -295,6 +399,24 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute(
                 "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
                 "WHERE Def = 1 AND Use = 1")
+            self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
+            self.db.connection.execute("""
+                CREATE TABLE Dropdown (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    TableName TEXT NOT NULL,
+                    FieldName TEXT NOT NULL,
+                    ListItem TEXT NOT NULL COLLATE NOCASE,
+                    Def INTEGER NOT NULL DEFAULT 0,
+                    Use INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(TableName, FieldName, ListItem)
+                )
+            """)
+            self.db.connection.execute(
+                "INSERT INTO Dropdown (ID, TableName, FieldName, ListItem, Def, Use) "
+                "SELECT ID, TableName, FieldName, ListItem, Def, Use FROM DropdownCurrent")
+            self.db.connection.execute("DROP TABLE DropdownCurrent")
+            self.db.connection.execute("CREATE UNIQUE INDEX DropdownDefaultIndex "
+                                       "ON Dropdown(TableName, FieldName) WHERE Def = 1 AND Use = 1")
             self.db.connection.execute("PRAGMA user_version = 9")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -304,6 +426,8 @@ class DatabaseTests(unittest.TestCase):
         self.assertTrue(self.db.upgrade_backup.exists())
         blue = next(row for row in before if row["ListItem"] == "Blue")
         _, warning = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, None, blue["ID"], blue)
+        self.assertFalse(warning)
+        _, warning = self.db.save_dropdown("FabricPiece", "Color", "Red", 1, 1)
         self.assertTrue(warning)
 
     def make_legacy_database(self):
@@ -345,8 +469,8 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(error_ids, [tuple(row) for row in self.db.connection.execute(
             "SELECT ErrorTextID, MessageKey FROM ErrorText ORDER BY ErrorTextID",
         )])
-        self.assertEqual(self.db.dropdown_choices("Color"), ("", ADD_ITEM, "Sage"))
-        self.assertEqual(self.db.dropdown_choices("StorageLocation"), ("", ADD_ITEM, "Bin C"))
+        self.assertEqual(self.db.dropdown_choices("Color"), (ADD_ITEM, "Sage"))
+        self.assertEqual(self.db.dropdown_choices("StorageLocation"), (ADD_ITEM, "Bin C"))
         self.assertTrue(self.db.upgrade_backup.exists())
         backup = sqlite3.connect(self.db.upgrade_backup)
         try:

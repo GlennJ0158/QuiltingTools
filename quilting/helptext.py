@@ -1,8 +1,12 @@
 """Default help catalog, keyed by screen and field, column or button."""
 
-from .model import FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, SORT_FIELDS, Field
+from .model import (
+    FABRIC_FIELDS, FILTER_FIELDS, GRAIN_DIRECTIONS, LIST_COLUMNS, PRINT_DIRECTIONS, SORT_FIELDS,
+    STATUSES, Field,
+)
 from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS
-from .blocks import BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, PART_FIELDS
+from .blocks import BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, COLORS, PART_FIELDS, SHAPES
+from .backs import PALETTE
 
 NAVIGATION = ("Fabric", "Quilt Backs", "QuiltBlock", "Quilt", "DropDown", "HelpText", "ErrorMessage", "Setup", "Screen Help")
 DROPDOWN_FORM_FIELDS = (
@@ -19,7 +23,7 @@ HELP_FIELDS = (
     Field("FullText", required=True, limit=16000, kind="memo", width=80),
 )
 HELP_COLUMNS = ("ID", "TableName", "FieldName", "HoverText", "FullText")
-DROPDOWN_COLUMNS = ("ID", "TableName", "FieldName", "ListItem", "Def", "Use")
+DROPDOWN_COLUMNS = ("ID", "TableName", "FieldName", "ListItem", "Def", "Use", "UserModified")
 HISTORY_COLUMNS = ("ID", "Action", "DateCreated")
 BACK_LAYOUT_COLUMNS = ("ID", "Layout", "Parts", "Seams", "Grain", "Minimum", "FabricArea")
 BACK_COLUMNS = ("ID", "BackName", "BackWidth", "BackLength", "Status", "DateModified")
@@ -102,19 +106,23 @@ SCREEN_HELP = {
         "Delete Saved removes only the snapshot.",
     ),
     "DropDown": (
-        "Maintain values keyed by database table or application screen.",
-        "Choose a Table Name (a database table or screen) and its Field Name or Button Name. "
+        "Maintain supported dropdown lists and defaults.",
+        "Choose a supported Table Name and Field Name. Dynamic menus whose values come from data "
+        "are outside the DropDown system. UserModified is read-only. Protected system items cannot "
+        "be added, deleted, or have their item text or Use flag changed; only Def can be changed, "
+        "after confirmation that the change may affect internal program operations or assumptions. "
         "The list shows values for that key. Select Highlighted, Filter, Set Selection and Sort "
-        "manage the current list. Add, Update and Delete maintain values and their Def and Use flags. "
-        "Set or clear each flag for Add; Update can leave either unchanged. Multiple defaults "
-        "produce a warning; the first active default alphabetically is used. FabricPiece fields continue to provide "
-        "the choices used by fabric entry forms; screen and other table values are stored for their "
-        "corresponding keys.",
+        "manage the current list. Add, Update and Delete maintain user-editable values and their "
+        "Def and Use flags. Multiple active defaults produce a warning; the first encountered is used. "
+        "Only supported lists appear here. Dynamic menus whose values are determined by data are "
+        "outside the DropDown system. UserModified is read-only. Protected items can only have their "
+        "default changed, after confirmation.",
     ),
     "Add Item": (
         "Add a fabric choice without saving the fabric form.",
         "Enter one nonblank choice and choose Add Item. The choice is saved immediately and "
-        "selected in the Fabric form, but no fabric record is saved. Cancel restores the previous "
+        "selected in the Fabric form, but no fabric record is saved. Optionally set it as the default "
+        "and clear other defaults for this list. Cancel restores the previous "
         "choice. Navigation abandons unfinished input after confirmation; a successfully saved "
         "choice is not removed when later fabric edits are discarded.",
     ),
@@ -279,11 +287,14 @@ FIELD_HELP = {
     "Description": ("Describe a likely fix for each cause.", "Required plain text up to 16,000 "
                     "characters. Use the same numbering as Likely Cause and explain safe recovery."),
     "FabricName": ("Identify this physical rectangle.", "Required fabric name, up to 120 characters. "
+                   "Choose FabricName is a display-only placeholder; enter or select a value before saving. "
                    "Several physical rectangles can share a name; each remains a separate record."),
     "Color": ("Describe the fabric color.", "Optional color description. Choose an existing value "
-              "or Add Item. Fabric filters match text contained anywhere in this value."),
+              "or Add Item. With no default, Choose Color is only a placeholder; leaving it blank saves NULL. "
+              "Fabric filters match text contained anywhere in this value."),
     "PatternName": ("Name the fabric print or design.", "Optional print or design name, not a quilt "
-                    "construction pattern. Choose an existing value or Add Item."),
+                    "construction pattern. Choose an existing value or Add Item. With no default, "
+                    "Choose PatternName is only a placeholder; leaving it blank saves NULL."),
     "UsableWidth": ("Enter usable width in inches.", "Required positive width, excluding selvage and "
                     "damage. Enter 42, 42.5 or 42 1/2. Fractions through 1/64 and up to six decimal "
                     "places are stored exactly. Maximum 10,800 inches; do not include unit symbols."),
@@ -297,7 +308,8 @@ FIELD_HELP = {
                        "Width refer to the recorded dimensions. Non-directional means rotation "
                        "does not affect the print's orientation. Unknown is not non-directional."),
     "StorageLocation": ("Locate the fabric on a shelf or in a bin.", "Optional physical storage "
-                        "location. Choose an existing value or Add Item; maximum 120 characters."),
+                        "location. Choose an existing value or Add Item; maximum 120 characters. "
+                        "With no default, Choose StorageLocation is only a placeholder; leaving it blank saves NULL."),
     "Status": ("Choose Available or Retired.", "Available pieces appear in the initial Fabric list. "
                "Retired pieces retain their records and history. Retirement is not a cutting "
                "transaction. Use Reset Selection to include retired pieces."),
@@ -481,7 +493,7 @@ SCREEN_FIELDS = {
     "Sort": tuple(field for index in range(1, len(SORT_FIELDS) + 1) for field in (
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
     "Set Selection": (Field("SavedSet"), Field("SetName")),
-    "Add Item": (Field("ListItem"),),
+    "Add Item": (Field("ListItem"), Field("Def")),
     "History Filter": HISTORY_FILTER_FIELDS,
     "History Sort": tuple(field for index in range(1, len(HISTORY_COLUMNS) + 1) for field in (
         Field(f"SortField{index}"), Field(f"Direction{index}"))),
@@ -546,14 +558,65 @@ SCREEN_BUTTONS = {
     "History Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
     "Screen Help": ("Close",),
 }
+SYSTEM_DROPDOWNS = {
+    ("FabricPiece", "GrainDirection"): (GRAIN_DIRECTIONS, "Unknown"),
+    ("FabricPiece", "PrintDirection"): (PRINT_DIRECTIONS, "Unknown"),
+    ("FabricPiece", "Status"): (STATUSES, "Available"),
+    ("Block Parts", "Shape"): (SHAPES, ""),
+    ("Block Parts", "PartColor"): (COLORS, ""),
+    ("QuiltBlock Filter", "Status"): (("Draft", "Approved"), ""),
+    ("Quilt Backs Filter", "Status"): (("", "Draft", "Cut", "Assembled"), ""),
+    ("Quilt", "PartColor"): (COLORS, ""),
+    ("Quilt", "QuiltReportFormat"): (("Entire Quilt", "By Block"), "Entire Quilt"),
+    ("Block Sketch", "Mirror"): (("No", "Yes"), "No"),
+    ("DropDown Filter", "Default"): (("", "Yes", "No"), ""),
+    ("History Filter", "Action"): (("", "Added", "Updated"), ""),
+}
+DROPDOWN_LIST_FIELDS = {"FabricPiece": ("FabricName", "Color", "PatternName", "StorageLocation")}
+for _table, _ in SYSTEM_DROPDOWNS:
+    DROPDOWN_LIST_FIELDS[_table] = tuple(dict.fromkeys((
+        *DROPDOWN_LIST_FIELDS.get(_table, ()),
+        *(field for owner, field in SYSTEM_DROPDOWNS if owner == _table),
+    )))
+DYNAMIC_LIST_HELP = {
+    ("Quilt", "SavedQuilt"),
+    ("Quilt", "ApprovedBlock"),
+    ("Quilt", "InventoryColor"),
+    ("Quilt", "SavedQuiltPlan"),
+    ("Block Sketch", "Placement"),
+    ("QuiltBlock Set", "SavedSet"),
+    ("Error Set", "SavedSet"),
+    ("Quilt Backs Set", "SavedSet"),
+    ("DropDown Set", "SavedSet"),
+    ("HelpText Set", "SavedSet"),
+    ("Set Selection", "SavedSet"),
+    ("History Set", "SavedSet"),
+}
+PROTECTED_LIST_HELP = {
+    ("Fabric", "GrainDirection"),
+    ("Fabric", "PrintDirection"),
+    ("Fabric", "Status"),
+    ("Block Parts", "Shape"),
+    ("Block Parts", "PartColor"),
+    ("QuiltBlock Filter", "Status"),
+    ("Quilt Backs Filter", "Status"),
+    ("Quilt", "PartColor"),
+    ("Quilt", "QuiltReportFormat"),
+    ("Block Sketch", "Mirror"),
+    ("DropDown Filter", "Default"),
+    ("History Filter", "Action"),
+}
 COLUMN_HELP = {
     "Revision": ("Saved revision number.", "Changes whenever this block or its parts are saved."),
     "ID": ("Unique saved record number.", "Database-generated identity for this record; not a row "
            "count or list position. The identity remains stable when the list is sorted."),
     "Def": ("Whether this item is the key's default.", "1 marks a default; 0 means it "
-            "is not a default. If multiple active defaults exist, the first alphabetically is used."),
+            "is not a default. If multiple defaults exist, the first active item encountered is used."),
     "Use": ("Whether this dropdown value is active.", "1 means the value is active and appears "
-            "in fabric selection lists. Inactive values remain visible in the maintenance list."),
+            "in its associated selection list. Inactive values remain visible in the maintenance list."),
+    "UserModified": ("Whether users may maintain this item.",
+                     "1 means the list item can be changed or deleted. 0 means only its default "
+                     "can be changed; the item is system-defined."),
     "ListItem": ("Saved value for this key.", "The exact stored spelling for the selected "
                  "Table Name and Field Name. FabricPiece field values appear in fabric forms."),
     "Action": ("Type of saved inventory change.", "Added creates a new physical rectangle; Updated "
@@ -644,17 +707,29 @@ def default_help():
             elif screen == "DropDown":
                 pair = {
                     "TableName": ("Choose a database table or application screen.",
-                                  "Choose the key owner for the value list. Screen names and database "
-                                  "table names are supported."),
-                    "FieldName": ("Choose a field or button within the selected owner.",
-                                  "The available names depend on Table Name. Screen button captions "
-                                  "can also identify a value list."),
+                                  "Choose the owner of a supported list. Dynamic menus are not listed."),
+                    "FieldName": ("Choose a supported field within the selected owner.",
+                                  "The available names depend on Table Name."),
                     "ListItem": COLUMN_HELP["ListItem"],
                     "Def": ("Choose how to change the default flag.",
                             "Choose Set Default or Clear Default for Add; Update may ignore the flag."),
                     "Use": ("Choose how to change the active flag.",
                             "Choose Set Use or Clear Use for Add; Update may ignore the flag."),
                 }[field.name]
+            elif screen == "Add Item" and field.name == "Def":
+                pair = ("Choose whether this item is the default.",
+                        "Set Default marks the added item as a default. You can clear the other defaults.")
+            elif (screen, field.name) in DYNAMIC_LIST_HELP:
+                pair = (FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[0],
+                        FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[1]
+                        + " This is a dynamic list whose values come directly from the data. "
+                        "This list does not use the DropDown system for setting or updating values.")
+            elif (screen, field.name) in PROTECTED_LIST_HELP:
+                pair = (FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[0],
+                        FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[1]
+                        + " This is a system-generated protected list. The values are used in internal "
+                        "program logic and changing values can interfere with program operation. "
+                        "The user may change the default value using the DropDown system.")
             elif screen == "QuiltBlock" and field.name == "Description":
                 pair = ("Describe this block.", "Optional block description, up to 4,000 characters.")
             elif screen == "QuiltBlock Filter":

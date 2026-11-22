@@ -19,10 +19,11 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 9 prompt for a backed-up
+automatically. Databases with schema versions 1 through 11 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
 working-list selections, Quilt Backs planning, generalized dropdown keys and
-QuiltBlock/Quilt design; declining leaves the
+QuiltBlock/Quilt design, protected list metadata, and nullable optional fabric fields;
+declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
@@ -257,25 +258,35 @@ Add Item comes first, followed by the active values alphabetically. Initially th
 is blank. Choose **Add Item** to enter a value without leaving the fabric form;
 Cancel leaves the previous value intact. Names differing only in ASCII letter
 case or surrounding whitespace reuse the existing spelling rather than creating
-duplicates. Saving fabric also registers/canonicalizes these values at the
-database boundary.
+duplicates. With no default, the control displays **Choose \<FieldName\>** as a
+placeholder; it is never saved as a value. Fabric Name is required, while Color,
+Pattern Name and Storage Location save as NULL when left blank.
 
-Open **DropDown** from the navigation bar and choose a database **Table Name** or
-application screen, then its **Field Name** or button name. Enter a **List Item**
+When adding an item, choose whether to set it as a default. If another default
+exists for the same key, choose whether to clear the others, keep them (with a
+warning), or cancel. Clearing the other defaults and saving the item are atomic.
+The same choice is available when setting a default in DropDown maintenance.
+
+Open **DropDown** from the navigation bar and choose a supported table or screen,
+then its **Field Name**. Enter a **List Item**
 and choose **Set Default** or **Clear Default**, and **Set Use** or **Clear Use**,
 then choose **Add**. Highlight a row to **Update** or **Delete** it; on update,
 each flag may be left unchanged with **Ignore for Update**. Blank List Item on update
 leaves its value unchanged. Delete requires confirmation and removes the item from
 saved dropdown selection sets, not existing fabric records. Saving fabric registers
-its values and can recreate a deleted choice.
+its values and can recreate a deleted choice. Data-derived menus, such as saved
+quilts, approved blocks and inventory colors, are not maintained here.
 
 Values are stored per key, and inactive items remain visible for maintenance but
 are excluded from fabric selection lists. A list can have no default. If multiple
 items are marked default, a warning appears on Add or Update; the first active
-default alphabetically is used and the others are ignored until corrected. The next
-cleared/new fabric form uses that default (or a blank value if none); existing records
-are not changed. Def and Use are five-character columns. Navigating away from Fabric
-discards unsaved form values after confirmation.
+default encountered is used and the others are ignored until corrected. The next
+cleared/new form uses that default (or **Choose \<FieldName\>** if none); existing
+records are not changed. Protected system lists cannot be added to, deleted or have
+their values or Use flags changed. Changing their default requires confirmation
+because it may affect internal program operations or assumptions; the UserModified
+indicator is read-only. Def and Use are five-character columns. Navigating away from
+Fabric discards unsaved form values after confirmation.
 Grain Direction, Print Direction and Status get their defaults from the same
 `Dropdown` table, but keep their defined choices: arbitrary directions or stock
 statuses cannot be added.

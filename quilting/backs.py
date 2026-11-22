@@ -65,7 +65,7 @@ class Layout:
 
 def palette_suggestion(description):
     """Suggest a controlled sketch color from a description; never changes inventory."""
-    text = description.casefold()
+    text = (description or "").casefold()
     matches = (
         (("multi", "print", "floral", "variegated"), "Multicolor"),
         (("cream", "ivory", "ecru"), "Cream"),
