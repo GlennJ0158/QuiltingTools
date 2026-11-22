@@ -76,6 +76,21 @@ class BlockUITests(unittest.TestCase):
         self.assertEqual(len(self.app.block_list.tree.get_children()), 2)
         self.errors.assert_not_called()
 
+    def test_create_from_template_uses_block_form_dimensions(self):
+        self.app.block_form.assign(block(FinishedWidth="12", FinishedLength="10"))
+        self.click(self.app.block_page, "Create from Template")
+        window = self.app.dialogs[-1]
+        chooser = next(widget for widget in descendants(window) if isinstance(widget, ttk.Combobox))
+        chooser.set("Flying Geese")
+        chooser.event_generate("<<ComboboxSelected>>")
+        self.click(window, "Create")
+        saved = self.db.get_block(self.app.block_id)
+        self.assertEqual(saved["BlockName"], "Flying Geese")
+        self.assertEqual(saved["FinishedWidth"], 12_000_000)
+        self.assertEqual(saved["FinishedLength"], 10_000_000)
+        self.assertEqual(self.app.block_list.tree.selection(), (str(self.app.block_id),))
+        self.errors.assert_not_called()
+
     def test_print_sketch_escapes_text_and_includes_cut_outlines(self):
         block_id = self.db.add_block(block(BlockName="<Block>"))
         self.db.save_block_part(block_id, 1, part(PartName="<Panel>"))

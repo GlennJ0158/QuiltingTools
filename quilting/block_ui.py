@@ -11,6 +11,7 @@ from tkinter import font as tkfont
 from .blocks import (
     BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, PART_FIELDS, cutting_shape, placed_shape, validate_layout,
 )
+from .block_templates import BLOCK_TEMPLATES
 from .model import Field, FieldError, UNITS_PER_INCH, caption, display_measurement, normalize_sort, validate_fields
 
 
@@ -50,6 +51,7 @@ class BlockScreenMixin:
         actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
         for label, action in (("Add", self.add_block), ("Update", self.update_block),
+                              ("Create from Template", self.create_block_template),
                               ("Delete", self.delete_block), ("Clear", self.clear_block_entry),
                               ("New Version", self.copy_block), ("Parts", self.open_parts),
                               ("Sketch", self.open_block_sketch), ("Approve", self.approve_block)):
@@ -126,6 +128,35 @@ class BlockScreenMixin:
 
     def add_block(self):
         self.refresh_blocks(self.db.add_block(self.block_form.values()))
+
+    def create_block_template(self):
+        if self.block_id is not None and not self.allow_block_discard():
+            return
+        window = self.dialog("Create Block from Template", "QuiltBlock")
+        content = ttk.Frame(window, padding=8)
+        content.pack(fill="both", expand=True)
+        ttk.Label(
+            content, text="Set finished width and length on the Quilt Block form before creating a template."
+        ).pack(anchor="w", pady=(0, 8))
+        selected = tk.StringVar(value=next(iter(BLOCK_TEMPLATES)))
+        chooser = ttk.Combobox(
+            content, textvariable=selected, values=tuple(BLOCK_TEMPLATES), state="readonly",
+        )
+        chooser.pack(fill="x")
+        description = ttk.Label(content, text=BLOCK_TEMPLATES[selected.get()], wraplength=480)
+        description.pack(anchor="w", pady=8)
+        chooser.bind("<<ComboboxSelected>>", lambda _: description.configure(
+            text=BLOCK_TEMPLATES[selected.get()]))
+
+        def create():
+            block_id = self.db.create_block_template(selected.get(), self.block_form.values())
+            window.destroy()
+            self.refresh_blocks(block_id)
+
+        controls = ttk.Frame(content)
+        controls.pack(fill="x", pady=(4, 0))
+        self.button(controls, "Create", create)
+        self.button(controls, "Cancel", window.destroy)
 
     def update_block(self):
         block_id = self.require_block()

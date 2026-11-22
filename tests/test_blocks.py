@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from quilting.blocks import cutting_shape, finished_shape, parse_part, validate_layout
+from quilting.block_templates import BLOCK_TEMPLATES
 from quilting.database import Database, UpgradeRequired
 from quilting.model import FieldError
 from tests.test_inventory import downgrade_dropdown_schema
@@ -79,6 +80,26 @@ class BlockTests(unittest.TestCase):
         circle = parse_part(part(Shape="Circle", PartWidth="", PartLength="", Diameter="4"))
         self.assertAlmostEqual(cutting_shape(circle, 1, 250_000).bounds[2]
                                - cutting_shape(circle, 1, 250_000).bounds[0], 4.5, places=3)
+
+    def test_templates_create_complete_editable_layouts(self):
+        for name in BLOCK_TEMPLATES:
+            for width, length, scale in (("12", "12", "100"), ("12", "10", "10000")):
+                with self.subTest(template=name, size=(width, length), scale=scale):
+                    block_id = self.db.create_block_template(
+                        name, block(BlockName="Ignored", FinishedWidth=width,
+                                    FinishedLength=length, Scale=scale))
+                    current = self.db.get_block(block_id)
+                    self.assertEqual(current["BlockName"], name)
+                    self.assertEqual(current["Status"], "Draft")
+                    self.assertGreater(len(self.db.block_parts(block_id)), 1)
+                    self.assertEqual(validate_layout(
+                        current, self.db.block_parts(block_id), self.db.block_placements(block_id)), [])
+                    self.db.approve_block(block_id, current["Revision"])
+
+    def test_unknown_template_does_not_create_a_block(self):
+        with self.assertRaises(FieldError):
+            self.db.create_block_template("Unknown", block())
+        self.assertEqual(self.db.blocks(), [])
 
     def test_large_block_does_not_accept_small_physical_gap(self):
         block_id = self.db.add_block(block(FinishedWidth="1000", FinishedLength="1000"))
