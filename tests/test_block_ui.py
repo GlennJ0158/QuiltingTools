@@ -42,12 +42,18 @@ class BlockUITests(unittest.TestCase):
         block_id = self.app.block_id
         self.click(self.app.block_page, "Parts")
         window = self.app.dialogs[-1]
+        for widget in descendants(window):
+            if isinstance(widget, (ttk.Button, ttk.Entry, tk.Text)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
         form = next(child for child in window.winfo_children() if isinstance(child, Form))
         form.assign(part())
         self.click(window, "Add")
         self.click(window, "Close")
         self.click(self.app.block_page, "Sketch")
         window = self.app.dialogs[-1]
+        for widget in descendants(window):
+            if isinstance(widget, (ttk.Button, ttk.Entry, tk.Canvas)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
         form = next(child for child in window.winfo_children() if isinstance(child, Form))
         choice = form.widgets["Placement"].cget("values")[1]
         form.variables["Placement"].set(choice)
@@ -81,6 +87,11 @@ class BlockUITests(unittest.TestCase):
         self.click(self.app.block_page, "Create from Template")
         window = self.app.dialogs[-1]
         chooser = next(widget for widget in descendants(window) if isinstance(widget, ttk.Combobox))
+        for widget in descendants(window):
+            if isinstance(widget, (ttk.Button, ttk.Combobox)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
+                widget.tooltip.show()
+                widget.tooltip.hide()
         chooser.set("Flying Geese")
         chooser.event_generate("<<ComboboxSelected>>")
         self.click(window, "Create")

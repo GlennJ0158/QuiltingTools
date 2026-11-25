@@ -26,6 +26,13 @@ from .model import (
 
 APPLICATION_ID = 0x5155494C
 SCHEMA_VERSION = 14
+
+
+class MissingHelp(FieldError):
+    def __init__(self, screen, name):
+        super().__init__("DatabaseFormat", "HelpText", detail=f"Missing help for {screen}/{name}.")
+
+
 BLOCK_SCHEMA = """
 CREATE TABLE QuiltBlock (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -799,7 +806,7 @@ class Database:
             (screen, name),
         ).fetchone()
         if row is None:
-            raise FieldError("DatabaseFormat", "HelpText", detail=f"Missing help for {screen}/{name}.")
+            raise MissingHelp(screen, name)
         hover, full = tuple(row)
         if (screen, name) in DYNAMIC_LIST_HELP:
             notice = ("This is a dynamic list whose values come directly from the data. "

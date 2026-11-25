@@ -56,7 +56,8 @@ Text** and **Full Text**, then choose **Update**. Table Name identifies the scre
 Field Name is a field name, `Column:<name>`, `Button:<caption>` or `ScreenHelp`.
 These keys are read-only. Saved edits take effect on the next tooltip/F1/help
 lookup. Startup inserts missing help objects without overwriting user text.
-Text is plain text, not rich text.
+If help is missing, its tooltip or F1 window shows a warning; the action remains
+available. Text is plain text, not rich text.
 
 HelpText includes the same Filter, Set Selection and multi-column Sort controls as
 the other working lists. Its sort is saved separately from Fabric in the existing

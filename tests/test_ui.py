@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import tkinter as tk
 import unittest
@@ -773,9 +774,10 @@ class ScreenTests(unittest.TestCase):
             self.assertLessEqual(parent.winfo_rootx() + parent.winfo_width() - right, 20)
             self.assertLess(nav.winfo_y(), 10)
             for widget in descendants(parent):
-                if isinstance(widget, ttk.Button):
+                if isinstance(widget, (ttk.Button, ttk.Entry, tk.Text)):
+                    self.assertTrue(hasattr(widget, "help_key"), str(widget))
                     pair = self.db.help_pair(*widget.help_key())
-                    self.assertTrue(all(pair), widget.cget("text"))
+                    self.assertTrue(all(pair), str(widget))
                 if isinstance(widget, Form):
                     for field in widget.widgets.values():
                         self.assertTrue(all(self.db.help_pair(*field.help_key())))
@@ -796,7 +798,53 @@ class ScreenTests(unittest.TestCase):
             window = self.app.dialogs[-1]
             verify(window, window.nav)
             window.destroy()
+        for screen in ("DropDown", "HelpText", "ErrorMessage", "QuiltBlock", "Quilt Backs"):
+            self.app.show_screen(screen)
+            for label in ("Filter", "Sort", "Set Selection"):
+                with self.subTest(screen=screen, dialog=label):
+                    self.click(self.app.screens[screen], label)
+                    window = self.app.dialogs[-1]
+                    verify(window, window.nav)
+                    window.destroy()
+        self.app.open_back_fabric_selection()
+        window = self.app.dialogs[-1]
+        verify(window, window.nav)
+        window.destroy()
         self.errors.assert_not_called()
+
+    def test_missing_help_warns_without_blocking_and_database_errors_are_not_hidden(self):
+        self.root.deiconify()
+        self.root.update()
+        button = self.app.add_button
+        screen, key = button.help_key()
+        with self.db.connection:
+            self.db.connection.execute(
+                "DELETE FROM HelpText WHERE TableName = ? AND FieldName = ?", (screen, key))
+        with self.assertLogs(level="WARNING") as logs:
+            button.tooltip.show()
+            label = next(child for child in button.tooltip.window.winfo_children()
+                         if isinstance(child, ttk.Label))
+            self.assertIn("Warning: help is unavailable", label.cget("text"))
+            button.tooltip.hide()
+            button.focus_force()
+            self.root.update()
+            button.event_generate("<F1>")
+            self.root.update()
+            help_window = self.app.dialogs[-1]
+            text = next(child for child in help_window.winfo_children() if isinstance(child, tk.Text))
+            self.assertIn("Warning: help is unavailable", text.get("1.0", "end"))
+            help_window.destroy()
+            self.assertEqual(len(logs.output), 1)
+        self.app.form.assign(fabric(FabricName="After missing help"))
+        button.invoke()
+        self.root.update()
+        self.assertEqual(self.db.get_piece(self.app.piece_id)["FabricName"], "After missing help")
+        self.errors.assert_not_called()
+        with patch.object(self.db, "help_pair", side_effect=sqlite3.OperationalError("database failure")):
+            button.event_generate("<F1>")
+            self.root.update()
+        self.errors.assert_called_once()
+        self.assertIn("database failure", self.errors.call_args.args[1])
 
     def test_modal_navigation_cancellation_and_help_preserve_or_discard_the_right_work(self):
         piece_id = self.add_piece()
@@ -1245,6 +1293,13 @@ class ScreenTests(unittest.TestCase):
             "SideMargin": "0",
             "SeamAllowance": "1",
         })
+        self.app.back_stock.tree.selection_set(str(source_ids[0]))
+        self.app.set_back_palette()
+        palette = self.app.dialogs[-1]
+        for widget in descendants(palette):
+            if isinstance(widget, (ttk.Button, ttk.Combobox)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
+        palette.destroy()
         self.app.back_stock.tree.selection_set(tuple(map(str, source_ids)))
         self.app.back_palette[source_ids[0]] = "Teal"
         self.app.generate_back_plans()
@@ -1253,6 +1308,9 @@ class ScreenTests(unittest.TestCase):
         self.app.preview_back()
         preview = self.dialog()
         self.assertTrue(any(isinstance(widget, tk.Canvas) for widget in descendants(preview)))
+        for widget in descendants(preview):
+            if isinstance(widget, ttk.Button):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
         back_id = self.app.save_back_draft()
         back_id = int(back_id) if back_id else int(self.app.back_selected_id)
         self.assertEqual(self.db.get_quilt_back(back_id)["Status"], "Draft")
@@ -1269,6 +1327,9 @@ class ScreenTests(unittest.TestCase):
         self.app.open_back_cut()
         dialog_window = next(iter(self.app.dialog_forms))
         form = self.app.dialog_forms[dialog_window][0]
+        for widget in descendants(dialog_window):
+            if isinstance(widget, (ttk.Button, ttk.Entry)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
         first_source, second_source = source_ids
         form.variables[f"RemainingWidth{first_source}"].set("5")
         form.variables[f"RemainingLength{first_source}"].set("10")

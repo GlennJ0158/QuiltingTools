@@ -275,6 +275,14 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
+    "TemplateName": ("Choose a block template.", "Select a template. Its description appears below; "
+                     "Create makes an editable draft using the QuiltBlock form's dimensions."),
+    "PaletteColor": ("Choose the sketch color.", "Select a palette color for the highlighted source fabric. "
+                     "Apply changes the sketch color only."),
+    "RemainingWidth": ("Enter the reusable remainder width.", "Enter the measured width in the source's "
+                       "recorded orientation, or leave both remainder dimensions blank if consumed."),
+    "RemainingLength": ("Enter the reusable remainder length.", "Enter the measured length in the source's "
+                        "recorded orientation, or leave both remainder dimensions blank if consumed."),
     "QuiltName": ("Name a quilt project.", "Required name, up to 120 characters."),
     "SavedQuilt": ("Choose a saved quilt.", "Select a saved quilt to review its composition and plans."),
     "ApprovedBlock": ("Choose an approved block version.", "Choose one approved block and set its quantity."),
@@ -373,6 +381,8 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
+    "Create": ("Create the selected template.", "Create an editable draft with the dimensions, "
+               "scale and seam allowance from the QuiltBlock form."),
     "Create from Template": ("Create a block from a named template.",
                              "Create an editable draft using the entered size, scale and seam allowance."),
     "Quilt": ("Open quilt planning.", "Compose quilts and create non-consuming cutting plans."),
@@ -479,7 +489,7 @@ SCREEN_FIELDS = {
     "Quilt": (Field("QuiltName"), Field("SavedQuilt"), Field("ApprovedBlock"), Field("Quantity"),
               Field("PartColor"), Field("InventoryColor"), Field("SavedQuiltPlan"), Field("QuiltReportFormat"),
               Field("QuiltPlanDetails")),
-    "QuiltBlock": BLOCK_FIELDS,
+    "QuiltBlock": (*BLOCK_FIELDS, Field("TemplateName")),
     "Block Parts": PART_FIELDS,
     "Block Sketch": (Field("BlockSketch"), Field("Placement"), Field("PositionX"), Field("PositionY"),
                      Field("Rotation"), Field("Mirror")),
@@ -545,7 +555,8 @@ SCREEN_COLUMNS = {
 SCREEN_BUTTONS = {
     "Quilt": ("Add Quilt", "Set Block Quantity", "Remove Block", "Map Color", "Remove Mapping",
               "Plan Quilt", "Print Quilt Plan"),
-    "QuiltBlock": ("Add", "Update", "Create from Template", "Delete", "Clear", "New Version", "Parts", "Sketch", "Approve",
+    "QuiltBlock": ("Add", "Update", "Create from Template", "Create", "Cancel", "Delete", "Clear",
+                   "New Version", "Parts", "Sketch", "Approve",
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Block Parts": ("Add", "Update", "Delete", "Clear", "Close"),
     "Block Sketch": ("Save Placement", "Print Sketch", "Close"),
@@ -562,7 +573,8 @@ SCREEN_BUTTONS = {
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Quilt Backs": ("Generate Plans", "Set Sketch Color", "Preview Sketch", "Save Draft",
                     "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric", "Use Named Selection",
-                    "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort"),
+                    "Select Highlighted", "Filter", "Set Selection", "Reset Selection", "Sort",
+                    "Apply", "Cancel", "Close"),
     "Quilt Backs Fabric Selection": ("Apply", "Cancel"),
     "Quilt Backs Filter": ("Apply", "Clear Fields", "Cancel"),
     "Quilt Backs Sort": ("Apply", "Clear Fields", "Cancel"),
@@ -690,6 +702,13 @@ def default_help():
                 hover, full = ("Restrict the adjacent list to highlighted records.",
                                "Restrict the source fabric list or saved plans list, according to "
                                "which button is used. Neither changes the Fabric working list.")
+            if screen == "Quilt Backs" and button == "Apply":
+                hover, full = ("Apply the chosen sketch color.",
+                               "Use this palette color for the selected source in sketches; "
+                               "the inventory color is unchanged.")
+            if screen == "Quilt Backs" and button == "Close":
+                hover, full = ("Close the sketch preview.",
+                               "Return to the quilt back without changing inventory.")
             if screen == "ErrorMessage" and button in (
                     "Add", "Update", "Filter", "Sort", "Reset Selection", "Set Selection"):
                 hover, full = {
@@ -729,7 +748,9 @@ def default_help():
                                "After confirmation, remove the named snapshot. Messages and the "
                                "current working list remain unchanged.")
             rows[screen, f"Button:{button}"] = hover, full
-        for field in SCREEN_FIELDS.get(screen, ()):
+        extra_fields = ((Field("PaletteColor"), Field("RemainingWidth"), Field("RemainingLength"))
+                        if screen == "Quilt Backs" else ())
+        for field in (*SCREEN_FIELDS.get(screen, ()), *extra_fields):
             if screen in ("Sort", "Error Sort", "DropDown Sort", "HelpText Sort", "History Sort",
                           "QuiltBlock Sort", "Quilt Backs Sort"):
                 pair = (("Choose a distinct field for this priority.",
