@@ -18,7 +18,8 @@ from .backs import (
     palette_suggestion, ratio_label,
 )
 from .database import (
-    DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS, DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
+    ALL_DROPDOWN_ROWS, ALL_DROPDOWN_SCOPE, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS,
+    DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
     HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database,
 )
 from .block_ui import BlockScreenMixin
@@ -870,13 +871,15 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             name for names in self.dropdown_owner_fields.values() for name in names
         ))
         fields = (
-            Field("TableName", "choice", choices=tuple(self.dropdown_owner_fields), default="FabricPiece"),
+            Field("TableName", "choice", choices=(*self.dropdown_owner_fields, ALL_DROPDOWN_ROWS),
+                  default="FabricPiece"),
             Field("FieldName", "choice", choices=all_fields, default="FabricName"),
             Field("ListItem"),
             Field("Def", "choice", choices=("", "Set Default", "Clear Default", "Ignore for Update")),
             Field("Use", "choice", choices=("", "Set Use", "Clear Use", "Ignore for Update")),
         )
-        ttk.Label(window, text="Choose a database table or screen, then a field or button. "
+        ttk.Label(window, text="Choose a database table or screen, then a field or button, "
+                  "or choose Show Everything. "
                   "FabricPiece choices continue to populate fabric forms.", wraplength=900, padding=8).pack(anchor="w")
         entry = ttk.Frame(window, style="Entry.TFrame")
         entry.pack(fill="x")
@@ -908,6 +911,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             for table_name, names in self.dropdown_owner_fields.items()
             for field_name in names
         }
+        self.dropdown_states[ALL_DROPDOWN_SCOPE] = self.new_list_state(
+            self.db.load_sort("DropDownAllSort"), DROPDOWN_FILTER_FIELDS,
+        )
         self.dropdown_form.widgets["TableName"].bind(
             "<<ComboboxSelected>>", self.command(self.dropdown_table_changed))
         self.dropdown_form.widgets["FieldName"].bind(
@@ -920,7 +926,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def dropdown_table(self):
         table_name = self.dropdown_form.variables["TableName"].get()
-        if table_name not in self.dropdown_owner_fields:
+        if table_name not in self.dropdown_owner_fields and table_name != ALL_DROPDOWN_ROWS:
             raise FieldError("Choice", "TableName")
         return table_name
 
@@ -931,19 +937,25 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         return field_name
 
     def dropdown_key(self):
-        return self.dropdown_table(), self.dropdown_field()
+        table_name = self.dropdown_table()
+        return ALL_DROPDOWN_SCOPE if table_name == ALL_DROPDOWN_ROWS else (table_name, self.dropdown_field())
 
     def dropdown_table_changed(self):
         if not self.allow_dropdown_discard():
             self.dropdown_form.variables["TableName"].set(self.dropdown_initial["TableName"])
             return
         table_name = self.dropdown_table()
-        fields = self.dropdown_owner_fields[table_name]
-        field_name = self.dropdown_form.variables["FieldName"].get()
-        self.dropdown_form.widgets["FieldName"].configure(values=fields)
-        if field_name not in fields:
-            field_name = fields[0]
-            self.dropdown_form.variables["FieldName"].set(field_name)
+        widget = self.dropdown_form.widgets["FieldName"]
+        if table_name == ALL_DROPDOWN_ROWS:
+            field_name = ""
+            widget.configure(values=(), state="disabled")
+        else:
+            fields = self.dropdown_owner_fields[table_name]
+            field_name = self.dropdown_form.variables["FieldName"].get()
+            widget.configure(values=fields, state="readonly")
+            if field_name not in fields:
+                field_name = fields[0]
+        self.dropdown_form.variables["FieldName"].set(field_name)
         self.dropdown_initial["TableName"] = table_name
         self.dropdown_initial["FieldName"] = field_name
         self.refresh_dropdowns()
@@ -1015,6 +1027,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def save_dropdown(self, item_id=None):
         table_name, field_name = self.dropdown_key()
+        if table_name == ALL_DROPDOWN_ROWS:
+            if item_id is None:
+                raise FieldError("Database", "TableName",
+                                 detail="Choose a specific table and field before adding an item.")
+            table_name, field_name = self.dropdown_row["TableName"], self.dropdown_row["FieldName"]
         values = self.dropdown_form.values()
         flags = {"Set Default": 1, "Clear Default": 0, "Set Use": 1, "Clear Use": 0,
                  "Ignore for Update": None, "": None}
@@ -1750,6 +1767,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             }[screen]
             sort_key = {"DropDown": "DropDownSort", "HelpText": "HelpTextSort",
                         "History": "HistorySort", "Quilt Backs": "QuiltBackSort"}[screen]
+            if screen == "DropDown" and self.dropdown_key() == ALL_DROPDOWN_SCOPE:
+                sort_key = "DropDownAllSort"
             order = self.working_list_sort(screen, state)
             title = f"Sort {screen}"
             window = self.dialog(title, f"{screen} Sort")
@@ -1837,7 +1856,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 scope = scope or self.dropdown_key()
                 list_rows = rows or (lambda: self.db.dropdown_rows(
                     scope[1], state["filters"], state["selected_ids"], state["sort"],
-                    scope[0],
+                    scope[0], include_inactive=True,
                 ))
             elif screen == "HelpText":
                 scope = None

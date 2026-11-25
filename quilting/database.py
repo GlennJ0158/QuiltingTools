@@ -305,6 +305,9 @@ SAVED_SORTS = {
     "FabricInventorySort": (SORT_FIELDS, DEFAULT_SORT),
     "DropDownSort": (DROPDOWN_COLUMNS,
                      (("Def", "desc"), ("ListItem", "asc"), ("ID", "asc"))),
+    "DropDownAllSort": (DROPDOWN_COLUMNS,
+                        (("TableName", "asc"), ("Def", "desc"), ("FieldName", "asc"),
+                         ("ListItem", "asc"), ("ID", "asc"))),
     "HelpTextSort": (HELP_COLUMNS, (("TableName", "asc"), ("FieldName", "asc"), ("ID", "asc"))),
     "ErrorMessageSort": (ERROR_COLUMNS, (("ID", "asc"),)),
     "HistorySort": (("ID", "Action", "DateCreated"),
@@ -321,6 +324,8 @@ WORKING_LIST_SCREENS = frozenset(("DropDown", "HelpText", "History", "Quilt Back
 DROPDOWN_SCOPE_FIELDS = {
     **DROPDOWN_LIST_FIELDS,
 }
+ALL_DROPDOWN_ROWS = "Show Everything"
+ALL_DROPDOWN_SCOPE = (ALL_DROPDOWN_ROWS, "")
 
 
 def now():
@@ -723,6 +728,10 @@ class Database:
                       "items can only have their default changed, after confirmation.")
             if notice not in full:
                 full = f"{full} {notice}"
+            notice = ("Choose Show Everything in Table Name to view all dropdown rows. "
+                      "Select a specific table and field to add an item.")
+            if notice not in full:
+                full = f"{full} {notice}"
         return hover, full
 
     def help_rows(self, filters=None, selected_ids=None, sort=None):
@@ -913,13 +922,15 @@ class Database:
 
     def dropdown_rows(self, name, filters=None, selected_ids=None, sort=None, table_name="FabricPiece",
                       include_inactive=False):
-        if (table_name not in DROPDOWN_SCOPE_FIELDS
-                or name not in DROPDOWN_SCOPE_FIELDS[table_name]):
+        all_rows = (table_name, name) == ALL_DROPDOWN_SCOPE
+        if not all_rows and (table_name not in DROPDOWN_SCOPE_FIELDS
+                             or name not in DROPDOWN_SCOPE_FIELDS[table_name]):
             raise FieldError("Choice", "FieldName")
         values = {field.name: "" for field in DROPDOWN_FILTER_FIELDS} if filters is None else filters
         clean = self._validate_fields(DROPDOWN_FILTER_FIELDS, values, "DropDown Filter")
-        order = self.load_sort("DropDownSort") if sort is None else normalize_sort(sort, DROPDOWN_COLUMNS)
-        clauses, args = ["TableName = ?", "FieldName = ?"], [table_name, name]
+        sort_key = "DropDownAllSort" if all_rows else "DropDownSort"
+        order = self.load_sort(sort_key) if sort is None else normalize_sort(sort, DROPDOWN_COLUMNS)
+        clauses, args = ([], []) if all_rows else (["TableName = ?", "FieldName = ?"], [table_name, name])
         if not include_inactive:
             clauses.append("Use = 1")
         if clean["ListItem"]:
@@ -929,11 +940,12 @@ class Database:
             clauses.append("Def = ?")
             args.append(int(clean["Default"] == "Yes"))
         sql_order = ", ".join(
-            f'"{field}"{" COLLATE NOCASE" if field in ("FieldName", "ListItem") else ""} {direction}'
+            f'"{field}"{" COLLATE NOCASE" if field in ("TableName", "FieldName", "ListItem") else ""} {direction}'
             for field, direction in order
         )
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         rows = [dict(row) for row in self.connection.execute(
-            "SELECT * FROM Dropdown WHERE " + " AND ".join(clauses) + f" ORDER BY {sql_order}", args,
+            "SELECT * FROM Dropdown" + where + f" ORDER BY {sql_order}", args,
         )]
         if selected_ids is not None:
             allowed = set(selected_ids)
@@ -1056,8 +1068,8 @@ class Database:
                 raise FieldError("Database", "ListItem", detail="This system item is protected.")
             self.connection.execute(
                 "DELETE FROM WorkingListMember WHERE RecordID = ? AND SelectionSetID IN "
-                "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown' AND ScopeName = ?)",
-                (item_id, self._working_list_scope("DropDown", (row["TableName"], row["FieldName"]))),
+                "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown')",
+                (item_id,),
             )
             self.connection.execute("DELETE FROM Dropdown WHERE ID = ?", (item_id,))
 
@@ -1789,8 +1801,9 @@ class Database:
                 table_name, field_name = scope
             else:
                 raise FieldError("Choice", "FieldName")
-            if (table_name not in DROPDOWN_SCOPE_FIELDS
-                    or field_name not in DROPDOWN_SCOPE_FIELDS[table_name]):
+            if ((table_name, field_name) != ALL_DROPDOWN_SCOPE
+                    and (table_name not in DROPDOWN_SCOPE_FIELDS
+                         or field_name not in DROPDOWN_SCOPE_FIELDS[table_name])):
                 raise FieldError("Choice", "FieldName")
             return json.dumps((table_name, field_name), separators=(",", ":"))
         if screen == "History":

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from quilting.database import Database, UpgradeRequired
+from quilting.database import ALL_DROPDOWN_SCOPE, Database, UpgradeRequired
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_measurement,
     measurement, normalize_sort, validate_fields,
@@ -291,6 +291,37 @@ class DatabaseTests(unittest.TestCase):
             self.db.add_dropdown_item("Color", " " * 4)
         with self.assertRaises(FieldError):
             self.db.add_dropdown_item("Notes", "Not a dropdown")
+
+    def test_all_dropdown_rows_sort_filter_and_selection_cleanup(self):
+        blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, 1)
+        amber, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Amber", 0, 0)
+        self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
+        rows = self.db.dropdown_rows("", table_name=ALL_DROPDOWN_SCOPE[0], include_inactive=True)
+        raw = [dict(row) for row in self.db.connection.execute("SELECT * FROM Dropdown")]
+        expected = sorted(raw, key=lambda row: (
+            row["TableName"].lower(), -row["Def"], row["FieldName"].lower(),
+            row["ListItem"].lower(), row["ID"],
+        ))
+        self.assertEqual(rows, expected)
+        self.assertIn(amber, [row["ID"] for row in rows])
+        self.assertEqual(
+            [row["ID"] for row in self.db.dropdown_rows(
+                "", {"ListItem": "am", "Default": ""}, [amber],
+                table_name=ALL_DROPDOWN_SCOPE[0], include_inactive=True)],
+            [amber],
+        )
+        all_set = self.db.save_set("All", [blue, amber], "DropDown", ALL_DROPDOWN_SCOPE)
+        field_set = self.db.save_set("Pattern", [amber], "DropDown", ("FabricPiece", "PatternName"))
+        self.db.delete_dropdown(amber, self.db.get_dropdown(amber))
+        self.assertEqual(self.db.set_members(all_set, "DropDown", ALL_DROPDOWN_SCOPE), [blue])
+        self.assertEqual(self.db.set_members(field_set, "DropDown", ("FabricPiece", "PatternName")), [])
+        self.db.save_sort((("ID", "desc"),), "DropDownAllSort")
+        self.db.close()
+        self.db = Database(self.path)
+        self.assertEqual(self.db.load_sort("DropDownAllSort"), (("ID", "desc"),))
+        self.assertEqual(self.db.load_sort("DropDownSort"), (("ListItem", "desc"), ("ID", "asc")))
+        with self.assertRaises(FieldError):
+            self.db.dropdown_rows("Color", table_name=ALL_DROPDOWN_SCOPE[0])
 
     def test_optional_dropdown_fields_store_null_and_required_name_rejects_placeholder(self):
         piece_id = self.db.save_piece(fabric(Color="", PatternName=None, StorageLocation=""))
