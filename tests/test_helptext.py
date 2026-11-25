@@ -64,6 +64,22 @@ class HelpTextTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.help_pair("Missing", "Missing")
 
+    def test_new_dialog_help_is_seeded_without_replacing_custom_help(self):
+        key = ("Quilt Backs", "Button:Print Plan")
+        row = next(row for row in self.db.help_rows()
+                   if (row["TableName"], row["FieldName"]) == key)
+        values = {field.name: row[field.name] for field in HELP_FIELDS}
+        self.db.save_help(row["ID"], {**values, "HoverText": "Custom print help"}, row)
+        with self.db.connection:
+            self.db.connection.execute(
+                "DELETE FROM HelpText WHERE TableName = ? AND FieldName = ?",
+                ("QuiltBlock", "Button:Create"))
+        self.db.close()
+        self.db = Database(self.path)
+        self.assertEqual(self.db.help_pair(*key)[0], "Custom print help")
+        self.assertEqual(self.db.help_pair("QuiltBlock", "Button:Create"),
+                         default_help()["QuiltBlock", "Button:Create"])
+
     def test_help_sort_is_validated_and_persists_independently(self):
         self.db.save_sort((("UsableWidth", "desc"),))
         self.db.save_sort((("HoverText", "desc"),), "HelpTextSort")

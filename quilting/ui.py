@@ -1,6 +1,7 @@
 """Tkinter list/detail screens with shared control and field-binding conventions."""
 
 import json
+import logging
 import re
 import sqlite3
 import traceback
@@ -20,7 +21,7 @@ from .backs import (
 from .database import (
     ALL_DROPDOWN_ROWS, ALL_DROPDOWN_SCOPE, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS,
     DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
-    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database,
+    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database, MissingHelp,
 )
 from .block_ui import BlockScreenMixin
 from .quilt_ui import QuiltScreenMixin
@@ -100,7 +101,7 @@ class Form(ttk.Frame):
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
                  memo_height=None, memo_width=None, memo_scrollbars=False,
-                 dropdown_scope="FabricPiece", wide_memos=(), allow_blank_choices=()):
+                 dropdown_scope="FabricPiece", wide_memos=(), allow_blank_choices=(), help_names=None):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
@@ -108,6 +109,7 @@ class Form(ttk.Frame):
         self.allow_blank_choices = allow_blank_choices
         self.variables, self.widgets, self.labels = {}, {}, {}
         self.previous_choices = {}
+        help_names = help_names or {}
         owner = self.winfo_toplevel().help_owner
         label_style = "Entry.TLabel" if style == "Entry.TFrame" else "TLabel"
         for index, field in enumerate(self.fields):
@@ -121,7 +123,8 @@ class Form(ttk.Frame):
             label = ttk.Label(self, text=label_text, style=label_style)
             self.labels[field.name] = label
             label.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
-            owner.attach_help(label, field.name)
+            help_name = help_names.get(field.name, field.name)
+            owner.attach_help(label, help_name)
             variable = tk.StringVar(master=self, value=field.default)
             container = None
             if field.kind == "memo":
@@ -150,7 +153,7 @@ class Form(ttk.Frame):
                                        if wide and index == len(self.fields) - 1 else 1,
                                        sticky="ew" if wide else "w", padx=(0, 20), pady=4)
             self.variables[field.name], self.widgets[field.name] = variable, widget
-            owner.attach_help(widget, field.name)
+            owner.attach_help(widget, help_name)
             if database is not None and field.name in DROPDOWN_FIELDS and field.kind == "dropdown":
                 widget.bind("<<ComboboxSelected>>", lambda event, name=field.name: self.choose_item(name))
                 variable.trace_add("write", lambda *_, name=field.name: self.remember_choice(name))
@@ -322,6 +325,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         root.help_owner = self
         self.current = "Fabric"
         self.dialogs, self.dialog_forms = [], {}
+        self.missing_help_warned = set()
         self.help_id = None
         self.filters = {field.name: "" for field in FILTER_FIELDS}
         self.filters["Status"] = "Available"
@@ -417,13 +421,23 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             return self.context(widget), name() if callable(name) else name
 
         widget.help_key = key
-        widget.tooltip = ToolTip(widget, lambda: self.db.help_pair(*key())[0])
+        widget.tooltip = ToolTip(widget, lambda: self.help_pair(*key())[0])
 
         def show(event):
             self.command(lambda: self.show_help(*key()))()
             return "break"
 
         widget.bind("<F1>", show, add="+")
+
+    def help_pair(self, screen, name):
+        try:
+            return self.db.help_pair(screen, name)
+        except MissingHelp:
+            text = f"Warning: help is unavailable for {screen}/{name}. You can continue working."
+            if (screen, name) not in self.missing_help_warned:
+                logging.warning(text)
+                self.missing_help_warned.add((screen, name))
+            return text, text
 
     def navigation(self, parent):
         bar = ttk.Frame(parent, padding=(8, 4))
@@ -1434,9 +1448,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             padding=10,
         ).pack(anchor="w")
         color = tk.StringVar(master=window, value=initial)
-        ttk.Combobox(
+        chooser = ttk.Combobox(
             window, textvariable=color, values=tuple(PALETTE), state="readonly",
-        ).pack(anchor="w", padx=10, pady=8)
+        )
+        chooser.pack(anchor="w", padx=10, pady=8)
+        self.attach_help(chooser, "PaletteColor")
         self.button(window, "Apply", lambda: self.apply_back_palette(window, piece["ID"], color.get()))
         self.button(window, "Cancel", window.destroy)
 
@@ -1560,7 +1576,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                      f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (rounded): {planned}",
                 padding=(8, 4),
             ).pack(anchor="w")
-        form = Form(window, tuple(fields), columns=2)
+        help_names = {field.name: ("RemainingWidth" if field.name.startswith("RemainingWidth")
+                                   else "RemainingLength") for field in fields}
+        form = Form(window, tuple(fields), columns=2, help_names=help_names)
         form.pack(fill="x")
         self.watch_dialog(window, form)
         self.button(window, "Confirm Cuts", lambda: self.commit_back_cut(window, form, sources))
@@ -2095,7 +2113,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             )
 
     def show_help(self, screen, name):
-        _, full = self.db.help_pair(screen, name)
+        _, full = self.help_pair(screen, name)
         window = self.dialog(f"{screen} - {caption(name)}", "Screen Help")
         window.geometry("800x520")
         text = tk.Text(window, wrap="word", padx=12, pady=12)

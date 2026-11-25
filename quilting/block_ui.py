@@ -144,6 +144,7 @@ class BlockScreenMixin:
             content, textvariable=selected, values=tuple(BLOCK_TEMPLATES), state="readonly",
         )
         chooser.pack(fill="x")
+        self.attach_help(chooser, "TemplateName")
         description = ttk.Label(content, text=BLOCK_TEMPLATES[selected.get()], wraplength=480)
         description.pack(anchor="w", pady=8)
         chooser.bind("<<ComboboxSelected>>", lambda _: description.configure(
