@@ -80,6 +80,14 @@ def display_back_measurement(value):
     return format(rounded, "f").rstrip("0").rstrip(".") if rounded % 1 else str(int(rounded))
 
 
+def display_field_key(value):
+    return {"FabricPattern": "Fabric Pattern", "Column:FabricPattern": "Column:Fabric Pattern"}.get(value, value)
+
+
+def stored_field_key(value):
+    return {"Fabric Pattern": "FabricPattern", "Column:Fabric Pattern": "Column:FabricPattern"}.get(value, value)
+
+
 def nonnegative_measurement(value, field):
     text = value.strip()
     if re.fullmatch(r"0(?:\.0{1,6})?", text):
@@ -172,7 +180,7 @@ class Form(ttk.Frame):
             self.previous_choices[name] = value
 
     def placeholder(self, name):
-        return f"Choose {name}"
+        return self.database.dropdown_placeholder(name) if self.database is not None else f"Choose {name}"
 
     def uses_dropdown_list(self, name):
         field = next(field for field in self.fields if field.name == name)
@@ -298,6 +306,7 @@ class RecordList(ttk.Frame):
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
+                else display_field_key(row[name]) if name == "FieldName"
                 else str(row[name])[:25] if name == self.name_limit
                 else row[name] for name in self.columns
             ]
@@ -774,6 +783,13 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         actions.pack(fill="x")
         self.button(actions, "Add Item", add)
         self.button(actions, "Cancel", window.destroy)
+        window.update_idletasks()
+        widget = source.widgets[name]
+        x = min(widget.winfo_rootx() + widget.winfo_width(),
+                max(0, window.winfo_screenwidth() - window.winfo_width()))
+        y = min(widget.winfo_rooty() + widget.winfo_height(),
+                max(0, window.winfo_screenheight() - window.winfo_height()))
+        window.geometry(f"+{max(0, x)}+{max(0, y)}")
         form.focus_field("ListItem")
 
     def new_list_state(self, sort=None, fields=()):
@@ -868,7 +884,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         ttk.Label(window, text="DropDown", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
         self.dropdown_owner_fields = DROPDOWN_SCOPE_FIELDS
         all_fields = tuple(dict.fromkeys(
-            name for names in self.dropdown_owner_fields.values() for name in names
+            display_field_key(name) for names in self.dropdown_owner_fields.values() for name in names
         ))
         fields = (
             Field("TableName", "choice", choices=(*self.dropdown_owner_fields, ALL_DROPDOWN_ROWS),
@@ -931,7 +947,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         return table_name
 
     def dropdown_field(self):
-        field_name = self.dropdown_form.variables["FieldName"].get()
+        field_name = stored_field_key(self.dropdown_form.variables["FieldName"].get())
         if field_name not in self.dropdown_owner_fields[self.dropdown_table()]:
             raise FieldError("Choice", "FieldName")
         return field_name
@@ -950,7 +966,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             field_name = ""
             widget.configure(values=(), state="disabled")
         else:
-            fields = self.dropdown_owner_fields[table_name]
+            fields = tuple(display_field_key(name) for name in self.dropdown_owner_fields[table_name])
             field_name = self.dropdown_form.variables["FieldName"].get()
             widget.configure(values=fields, state="readonly")
             if field_name not in fields:
@@ -1127,7 +1143,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         row = next(row for row in self.help_rows if str(row["ID"]) == selected[0])
         self.help_id = row["ID"]
         self.help_selection = selected
-        self.help_form.assign({field.name: row[field.name] for field in HELP_FIELDS})
+        self.help_form.assign({field.name: display_field_key(row[field.name]) if field.name == "FieldName"
+                               else row[field.name] for field in HELP_FIELDS})
         self.help_initial = self.help_form.values()
         self.help_update.state(["!disabled"])
 
@@ -1149,7 +1166,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
     def update_help(self):
         if self.help_id is None:
             raise FieldError("OneRecord", "HelpText")
-        self.db.save_help(self.help_id, self.help_form.values(), self.help_initial)
+        values = self.help_form.values()
+        values["FieldName"] = stored_field_key(values["FieldName"])
+        self.db.save_help(self.help_id, values, self.help_initial)
         self.help_initial = self.help_form.values()
         self.refresh_help()
 

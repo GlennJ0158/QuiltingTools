@@ -150,6 +150,7 @@ class BlockTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {name}")
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version=6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -181,6 +182,7 @@ class BlockTests(unittest.TestCase):
                 "SELECT ID, TableName, FieldName, ListItem, Def, Use FROM DropdownCurrent")
             self.db.connection.execute("DROP TABLE DropdownCurrent")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version=8")
         self.db.close()
         self.db = Database(self.path, upgrade=True)

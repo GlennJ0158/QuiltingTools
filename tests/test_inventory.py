@@ -116,7 +116,7 @@ class DatabaseTests(unittest.TestCase):
 
     def test_all_fields_survive_update_and_reopen(self):
         values = fabric(
-            FabricName="Red's cotton", Color="Red", PatternName="Tiny flowers",
+            FabricName="Red's cotton", Color="Red", FabricPattern="Tiny flowers",
             UsableWidth="41 1/64", UsableLength="0.123456", GrainDirection="Along Width",
             PrintDirection="Along Length", StorageLocation="Bin 3", Status="Retired",
             Notes="Washed; exclude selvage.",
@@ -292,9 +292,78 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(FieldError):
             self.db.add_dropdown_item("Notes", "Not a dropdown")
 
+    def test_v13_fabric_pattern_upgrade_preserves_data_and_custom_help(self):
+        piece_id = self.db.save_piece(fabric(FabricPattern="Choose Fabric Pattern",
+                                             Notes="Literal PatternName must stay unchanged."))
+        item = self.db.dropdown_rows("FabricPattern")[0]
+        set_id = self.db.save_set("Patterns", [item["ID"]], "DropDown", ("FabricPiece", "FabricPattern"))
+        self.db.save_sort((("FabricPattern", "desc"),))
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE Dropdown SET FieldName='PatternName' WHERE FieldName='FabricPattern'")
+            self.db.connection.execute(
+                "UPDATE WorkingListSet SET ScopeName=? WHERE ID=?",
+                (json.dumps(("FabricPiece", "PatternName"), separators=(",", ":")), set_id))
+            self.db.connection.execute(
+                "UPDATE ScreenState SET StateValues=? WHERE ScreenName='FabricInventorySort'",
+                (json.dumps([["PatternName", "desc"], ["ID", "asc"]]),))
+            self.db.connection.execute(
+                "UPDATE HelpText SET FieldName=replace(FieldName, 'FabricPattern', 'PatternName') "
+                "WHERE FieldName IN ('FabricPattern', 'Column:FabricPattern')")
+            self.db.connection.execute(
+                "UPDATE HelpText SET HoverText='My custom help', FullText='My PatternName notes' "
+                "WHERE TableName='Fabric' AND FieldName='PatternName'")
+            self.db.connection.execute(
+                "UPDATE HelpText SET HoverText='Filter fabric by pattern name.' "
+                "WHERE TableName='Filter' AND FieldName='PatternName'")
+            self.db.connection.execute(
+                "UPDATE HelpText SET FullText=replace(FullText, 'Choose Fabric Pattern', 'Choose PatternName') "
+                "WHERE TableName='Fabric' AND FieldName='Column:PatternName'")
+            row = self.db.connection.execute(
+                "SELECT ID, AfterValues FROM FabricHistory WHERE FabricPieceID=?", (piece_id,)).fetchone()
+            snapshot = json.loads(row["AfterValues"])
+            snapshot["PatternName"] = snapshot.pop("FabricPattern")
+            self.db.connection.execute("UPDATE FabricHistory SET AfterValues=? WHERE ID=?",
+                                       (json.dumps(snapshot), row["ID"]))
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            self.db.connection.execute("PRAGMA user_version=13")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.get_piece(piece_id)["FabricPattern"], "Choose Fabric Pattern")
+        self.assertEqual(self.db.dropdown_placeholder("FabricPattern"), "Choose Fabric Pattern (2)")
+        self.assertIn("Choose Fabric Pattern", self.db.dropdown_choices("FabricPattern"))
+        self.assertEqual(self.db.set_members(set_id, "DropDown", ("FabricPiece", "FabricPattern")), [item["ID"]])
+        self.assertEqual(self.db.load_sort(), (("FabricPattern", "desc"), ("ID", "asc")))
+        history = json.loads(self.db.history(piece_id)[0]["AfterValues"])
+        self.assertEqual(history["FabricPattern"], "Choose Fabric Pattern")
+        self.assertEqual(history["Notes"], "Literal PatternName must stay unchanged.")
+        self.assertNotIn("PatternName", history)
+        self.assertEqual(self.db.help_pair("Fabric", "FabricPattern"), ("My custom help", "My PatternName notes"))
+        self.assertIn("fabric pattern", self.db.help_pair("Filter", "FabricPattern")[0])
+        self.assertIn("Choose Fabric Pattern", self.db.help_pair("Fabric", "Column:FabricPattern")[1])
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 13)
+            self.assertEqual(backup.execute("SELECT PatternName FROM FabricPiece").fetchone()[0],
+                             "Choose Fabric Pattern")
+
+    def test_v13_fabric_pattern_upgrade_rolls_back_invalid_snapshot(self):
+        piece_id = self.db.save_piece(fabric(FabricPattern="Floral"))
+        with self.db.connection:
+            self.db.connection.execute("UPDATE FabricHistory SET AfterValues='not json' WHERE FabricPieceID=?",
+                                       (piece_id,))
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            self.db.connection.execute("PRAGMA user_version=13")
+        self.db.close()
+        with self.assertRaises(FieldError):
+            Database(self.path, upgrade=True)
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 13)
+            self.assertEqual(connection.execute("SELECT PatternName FROM FabricPiece").fetchone()[0], "Floral")
     def test_all_dropdown_rows_sort_filter_and_selection_cleanup(self):
         blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 1, 1)
-        amber, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Amber", 0, 0)
+        amber, _ = self.db.save_dropdown("FabricPiece", "FabricPattern", "Amber", 0, 0)
         self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
         rows = self.db.dropdown_rows("", table_name=ALL_DROPDOWN_SCOPE[0], include_inactive=True)
         raw = [dict(row) for row in self.db.connection.execute("SELECT * FROM Dropdown")]
@@ -311,10 +380,10 @@ class DatabaseTests(unittest.TestCase):
             [amber],
         )
         all_set = self.db.save_set("All", [blue, amber], "DropDown", ALL_DROPDOWN_SCOPE)
-        field_set = self.db.save_set("Pattern", [amber], "DropDown", ("FabricPiece", "PatternName"))
+        field_set = self.db.save_set("Pattern", [amber], "DropDown", ("FabricPiece", "FabricPattern"))
         self.db.delete_dropdown(amber, self.db.get_dropdown(amber))
         self.assertEqual(self.db.set_members(all_set, "DropDown", ALL_DROPDOWN_SCOPE), [blue])
-        self.assertEqual(self.db.set_members(field_set, "DropDown", ("FabricPiece", "PatternName")), [])
+        self.assertEqual(self.db.set_members(field_set, "DropDown", ("FabricPiece", "FabricPattern")), [])
         self.db.save_sort((("ID", "desc"),), "DropDownAllSort")
         self.db.close()
         self.db = Database(self.path)
@@ -324,10 +393,10 @@ class DatabaseTests(unittest.TestCase):
             self.db.dropdown_rows("Color", table_name=ALL_DROPDOWN_SCOPE[0])
 
     def test_optional_dropdown_fields_store_null_and_required_name_rejects_placeholder(self):
-        piece_id = self.db.save_piece(fabric(Color="", PatternName=None, StorageLocation=""))
+        piece_id = self.db.save_piece(fabric(Color="", FabricPattern=None, StorageLocation=""))
         row = self.db.get_piece(piece_id)
         self.assertIsNone(row["Color"])
-        self.assertIsNone(row["PatternName"])
+        self.assertIsNone(row["FabricPattern"])
         self.assertIsNone(row["StorageLocation"])
         with self.assertRaises(FieldError):
             self.db.save_piece(fabric(FabricName=""))
@@ -460,6 +529,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute("CREATE UNIQUE INDEX DropdownDefaultIndex "
                                        "ON Dropdown(TableName, FieldName) WHERE Def = 1 AND Use = 1")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 9")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -488,6 +558,7 @@ class DatabaseTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE Dropdown")
             self.db.connection.execute("DROP TABLE HelpText")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 1")
         before = {
             table: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")]

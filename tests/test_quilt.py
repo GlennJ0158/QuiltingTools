@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +56,26 @@ class QuiltPlanningTests(unittest.TestCase):
         plan = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 3))["PlanData"]
         self.assertEqual(len(plan["sources"][0]["cuts"]), 1)
         self.assertEqual(plan["missing"][0]["count"], 3)
+
+    def test_v13_upgrade_renames_saved_plan_source_pattern(self):
+        self.db.save_piece(fabric(Color="Red", FabricPattern="Floral", UsableWidth="12", UsableLength="22",
+                                  Notes="PatternName is just text"))
+        self.db.add_quilt_mapping(self.quilt_id, 2, "Red", "Red")
+        plan_id = self.db.create_quilt_plan(self.quilt_id, 3)
+        plan = self.db.get_quilt_plan(plan_id)["PlanData"]
+        source = plan["sources"][0]["source"]
+        source["PatternName"] = source.pop("FabricPattern")
+        with self.db.connection:
+            self.db.connection.execute("UPDATE QuiltPlan SET PlanData=? WHERE ID=?", (json.dumps(plan), plan_id))
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            self.db.connection.execute("PRAGMA user_version=13")
+        path = self.db.path
+        self.db.close()
+        self.db = Database(path, upgrade=True)
+        source = self.db.get_quilt_plan(plan_id)["PlanData"]["sources"][0]["source"]
+        self.assertEqual(source["FabricPattern"], "Floral")
+        self.assertNotIn("PatternName", source)
+        self.assertEqual(source["Notes"], "PatternName is just text")
 
     def test_quilts_share_approved_version_and_conflicts_are_rejected(self):
         second = self.db.add_quilt("Another")
