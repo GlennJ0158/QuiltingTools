@@ -8,7 +8,7 @@ from unittest.mock import patch
 from tkinter import ttk
 from tkinter import font as tkfont
 
-from quilting.database import Database
+from quilting.database import ALL_DROPDOWN_SCOPE, Database
 from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
@@ -1025,6 +1025,103 @@ class ScreenTests(unittest.TestCase):
             browser.assert_not_called()
         self.assertEqual(path.read_text(), report)
 
+
+    def test_dropdown_show_everything_maintains_actual_scope_and_all_rows(self):
+        blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
+        amber, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Amber", 0, 0)
+        self.app.show_screen("DropDown")
+        form = self.app.dropdown_form
+        form.variables["TableName"].set(ALL_DROPDOWN_SCOPE[0])
+        form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(form.variables["FieldName"].get(), "")
+        self.assertEqual(str(form.widgets["FieldName"].cget("state")), "disabled")
+        listed = self.app.dropdown_list.tree.get_children()
+        self.assertEqual(set(map(int, listed)), {
+            row["ID"] for row in self.db.connection.execute("SELECT ID FROM Dropdown")
+        })
+        self.assertIn(str(amber), listed)
+
+        self.app.dropdown_list.tree.selection_set(str(blue))
+        self.root.update()
+        form.variables["ListItem"].set("Blue updated")
+        self.click(self.app.dropdown_page, "Update")
+        self.assertEqual(self.db.get_dropdown(blue)["ListItem"], "Blue updated")
+        self.assertEqual(form.variables["TableName"].get(), ALL_DROPDOWN_SCOPE[0])
+
+        self.click(self.app.dropdown_page, "Filter")
+        filter_form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        filter_form.variables["ListItem"].set("Amber")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(amber),))
+        self.click(self.app.dropdown_page, "Set Selection")
+        set_form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        set_form.variables["SetName"].set("Inactive")
+        self.click(self.app.dialogs[-1], "Save Current")
+        saved = self.db.sets("DropDown", ALL_DROPDOWN_SCOPE)[0]
+        self.assertEqual(self.db.set_members(saved["ID"], "DropDown", ALL_DROPDOWN_SCOPE), [amber])
+        self.click(self.app.dropdown_page, "Reset Selection")
+        self.click(self.app.dropdown_page, "Set Selection")
+        set_form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        set_form.variables["SavedSet"].set(set_form.widgets["SavedSet"].cget("values")[1])
+        self.click(self.app.dialogs[-1], "Apply Saved")
+        self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(amber),))
+        self.app.dropdown_list.tree.selection_set(str(amber))
+        self.root.update()
+        self.click(self.app.dropdown_page, "Delete")
+        self.assertEqual(self.db.set_members(saved["ID"], "DropDown", ALL_DROPDOWN_SCOPE), [])
+
+        self.click(self.app.dropdown_page, "Add")
+        self.errors.assert_called_once()
+        self.assertIn("Choose a specific table and field", self.errors.call_args.args[1])
+        form.variables["TableName"].set("FabricPiece")
+        form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(str(form.widgets["FieldName"].cget("state")), "readonly")
+        self.assertIn(form.variables["FieldName"].get(), self.app.dropdown_owner_fields["FabricPiece"])
+
+    def test_dropdown_show_everything_preserves_default_and_sort_scopes(self):
+        red, _ = self.db.save_dropdown("FabricPiece", "Color", "Red", 1, 1)
+        blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
+        pattern, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Floral", 1, 1)
+        self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
+        self.app.show_screen("DropDown")
+        form = self.app.dropdown_form
+        form.variables["TableName"].set(ALL_DROPDOWN_SCOPE[0])
+        form.widgets["TableName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+
+        self.app.dropdown_list.tree.selection_set(str(blue))
+        self.root.update()
+        form.variables["Def"].set("Set Default")
+        self.default_confirm.return_value = True
+        self.click(self.app.dropdown_page, "Update")
+        self.default_confirm.assert_called_once()
+        self.assertEqual((self.db.get_dropdown(red)["Def"], self.db.get_dropdown(blue)["Def"],
+                          self.db.get_dropdown(pattern)["Def"]), (0, 1, 1))
+
+        protected = next(row for row in self.db.dropdown_rows("Status") if row["ListItem"] == "Retired")
+        self.app.dropdown_list.tree.selection_set(str(protected["ID"]))
+        self.root.update()
+        form.variables["Def"].set("Set Default")
+        self.confirm.return_value = False
+        self.click(self.app.dropdown_page, "Update")
+        self.assertEqual(self.db.get_dropdown(protected["ID"])["Def"], 0)
+        self.confirm.return_value = True
+        form.variables["Def"].set("Ignore for Update")
+
+        self.click(self.app.dropdown_page, "Sort")
+        sort_form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        self.assertEqual(sort_form.variables["SortField1"].get(), "Table Name")
+        self.assertEqual(sort_form.variables["SortField2"].get(), "Def")
+        self.assertEqual(sort_form.variables["Direction2"].get(), "desc")
+        sort_form.defaults()
+        sort_form.variables["SortField1"].set("ID")
+        sort_form.variables["Direction1"].set("desc")
+        self.click(self.app.dialogs[-1], "Apply")
+        self.assertEqual(self.db.load_sort("DropDownAllSort"), (("ID", "desc"),))
+        self.assertEqual(self.db.load_sort("DropDownSort"), (("ListItem", "desc"), ("ID", "asc")))
+        self.errors.assert_not_called()
 
     def test_dropdown_list_controls_filter_sort_and_scope_saved_sets(self):
         self.app.show_screen("DropDown")

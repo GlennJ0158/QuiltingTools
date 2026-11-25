@@ -122,12 +122,14 @@ SCREEN_HELP = {
         "are outside the DropDown system. UserModified is read-only. Protected system items cannot "
         "be added, deleted, or have their item text or Use flag changed; only Def can be changed, "
         "after confirmation that the change may affect internal program operations or assumptions. "
-        "The list shows values for that key. Select Highlighted, Filter, Set Selection and Sort "
+        "The list shows values for that key or all rows. Select Highlighted, Filter, Set Selection and Sort "
         "manage the current list. Add, Update and Delete maintain user-editable values and their "
         "Def and Use flags. Multiple active defaults produce a warning; the first encountered is used. "
         "Only supported lists appear here. Dynamic menus whose values are determined by data are "
         "outside the DropDown system. UserModified is read-only. Protected items can only have their "
-        "default changed, after confirmation.",
+        "default changed, after confirmation. "
+        "Choose Show Everything in Table Name to view all dropdown rows. "
+        "Select a specific table and field to add an item.",
     ),
     "Add Item": (
         "Add a fabric choice without saving the fabric form.",
@@ -228,7 +230,7 @@ SCREEN_HELP = {
     "DropDown Set": (
         "Save or recall a snapshot of the selected key's values.",
         "Save Current saves IDs of all listed values, not just highlights. Sets are scoped to the "
-        "selected Table Name and Field Name. Applying a set clears other list restrictions; "
+        "selected Table Name and Field Name, or to Show Everything. Applying a set clears other list restrictions; "
         "deleting it never changes the source values.",
     ),
     "HelpText Filter": (
@@ -739,9 +741,10 @@ def default_help():
             elif screen == "DropDown":
                 pair = {
                     "TableName": ("Choose a database table or application screen.",
-                                  "Choose the owner of a supported list. Dynamic menus are not listed."),
+                                  "Choose the owner of a supported list, or Show Everything for all rows. "
+                                  "Dynamic menus are not listed."),
                     "FieldName": ("Choose a supported field within the selected owner.",
-                                  "The available names depend on Table Name."),
+                                  "The available names depend on Table Name. Disabled for Show Everything."),
                     "ListItem": COLUMN_HELP["ListItem"],
                     "Def": ("Choose how to change the default flag.",
                             "Choose Set Default or Clear Default for Add; Update may ignore the flag."),

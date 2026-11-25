@@ -291,7 +291,10 @@ warning), or cancel. Clearing the other defaults and saving the item are atomic.
 The same choice is available when setting a default in DropDown maintenance.
 
 Open **DropDown** from the navigation bar and choose a supported table or screen,
-then its **Field Name**. Enter a **List Item**
+then its **Field Name**. Choose **Show Everything** in Table Name to view all
+dropdown rows, including inactive items; Field Name is disabled in this view.
+You can update or delete a highlighted row there, but adding requires a specific
+table and field. Enter a **List Item**
 and choose **Set Default** or **Clear Default**, and **Set Use** or **Clear Use**,
 then choose **Add**. Highlight a row to **Update** or **Delete** it; on update,
 each flag may be left unchanged with **Ignore for Update**. Blank List Item on update
@@ -347,7 +350,9 @@ Press F1 in an editable field for help.
 The **DropDown** choices, **HelpText** catalog, **Quilt Backs** saved plans and read-only **History** list use
 the same selection, filtering, named-set and multi-column sort workflow. Dropdown
 sets are scoped to the currently selected Table Name and Field Name; History sets
-are scoped to the currently selected piece. Dropdown filters search List Item or select
+are scoped to the currently selected piece. Show Everything has its own selection
+sets and saved sort; its default order is Table Name ascending, Def descending,
+Field Name ascending, List Item ascending, then ID ascending. Dropdown filters search List Item or select
 default/non-default rows. HelpText filters search each text/key column. History
 filters match action, timestamp or saved Before/After values. Quilt Backs filters
 match back name and status; its controls do not affect source or candidate lists.
