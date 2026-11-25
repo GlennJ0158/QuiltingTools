@@ -305,9 +305,9 @@ FIELD_HELP = {
     "Color": ("Describe the fabric color.", "Optional color description. Choose an existing value "
               "or Add Item. With no default, Choose Color is only a placeholder; leaving it blank saves NULL. "
               "Fabric filters match text contained anywhere in this value."),
-    "PatternName": ("Name the fabric print or design.", "Optional print or design name, not a quilt "
+    "FabricPattern": ("Name the fabric print or design.", "Optional print or design name, not a quilt "
                     "construction pattern. Choose an existing value or Add Item. With no default, "
-                    "Choose PatternName is only a placeholder; leaving it blank saves NULL."),
+                    "Choose Fabric Pattern is only a placeholder; leaving it blank saves NULL."),
     "UsableWidth": ("Enter usable width in inches.", "Required positive width, excluding selvage and "
                     "damage. Enter 42, 42.5 or 42 1/2. Fractions through 1/64 and up to six decimal "
                     "places are stored exactly. Maximum 10,800 inches; do not include unit symbols."),
@@ -602,7 +602,7 @@ SYSTEM_DROPDOWNS = {
     ("DropDown Filter", "Default"): (("", "Yes", "No"), ""),
     ("History Filter", "Action"): (("", "Added", "Updated"), ""),
 }
-DROPDOWN_LIST_FIELDS = {"FabricPiece": ("FabricName", "Color", "PatternName", "StorageLocation")}
+DROPDOWN_LIST_FIELDS = {"FabricPiece": ("FabricName", "Color", "FabricPattern", "StorageLocation")}
 for _table, _ in SYSTEM_DROPDOWNS:
     DROPDOWN_LIST_FIELDS[_table] = tuple(dict.fromkeys((
         *DROPDOWN_LIST_FIELDS.get(_table, ()),

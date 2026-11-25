@@ -19,11 +19,11 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 12 prompt for a backed-up
+automatically. Databases with schema versions 1 through 13 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
 working-list selections, Quilt Backs planning, generalized dropdown keys and
 QuiltBlock/Quilt design, protected list metadata, nullable optional fabric fields,
-and separate quilt-back margins;
+separate quilt-back margins and the Fabric Pattern field rename;
 declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
@@ -113,9 +113,9 @@ error history, printer drivers, or other report types are added.
 ### Fabric rectangles
 
 Each record represents **one physical usable rectangle**, not a quantity of
-interchangeable pieces. Enter its Fabric Name, Color, Pattern Name, Usable Width,
+interchangeable pieces. Enter its Fabric Name, Color, Fabric Pattern, Usable Width,
 Usable Length, Grain Direction, Print Direction, Storage Location, Status and
-Notes. Pattern Name describes the fabric's print, not a quilt pattern.
+Notes. Fabric Pattern describes the fabric's print, not a quilt pattern.
 Exclude selvage and damaged edges from usable dimensions. Grain and print
 directions are relative to the width and length as entered; dimensions are not
 silently rotated. Unknown directions remain explicitly unknown.
@@ -274,16 +274,17 @@ quantity/mapping changes before planning, and regenerate after inventory changes
 
 ### Standardized dropdowns
 
-Fabric Name, Color, Pattern Name and Storage Location use database-backed,
+Fabric Name, Color, Fabric Pattern and Storage Location use database-backed,
 read-only selection lists. Their order is **default first, Add Item second,
 then the remaining values alphabetically**, ignoring case. With no active default,
 Add Item comes first, followed by the active values alphabetically. Initially the default
 is blank. Choose **Add Item** to enter a value without leaving the fabric form;
+the window opens below and to the right of the field when space permits.
 Cancel leaves the previous value intact. Names differing only in ASCII letter
 case or surrounding whitespace reuse the existing spelling rather than creating
 duplicates. With no default, the control displays **Choose \<FieldName\>** as a
 placeholder; it is never saved as a value. Fabric Name is required, while Color,
-Pattern Name and Storage Location save as NULL when left blank.
+Fabric Pattern and Storage Location save as NULL when left blank.
 
 When adding an item, choose whether to set it as a default. If another default
 exists for the same key, choose whether to clear the others, keep them (with a

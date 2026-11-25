@@ -41,7 +41,7 @@ class Field:
 FABRIC_FIELDS = (
     Field("FabricName", "dropdown", required=True),
     Field("Color", "dropdown"),
-    Field("PatternName", "dropdown"),
+    Field("FabricPattern", "dropdown"),
     Field("UsableWidth", "length", True, width=6),
     Field("UsableLength", "length", True, width=6),
     Field("GrainDirection", "choice", True, GRAIN_DIRECTIONS, default="Unknown"),
@@ -53,7 +53,7 @@ FABRIC_FIELDS = (
 FILTER_FIELDS = (
     Field("FabricName"),
     Field("Color", "dropdown"),
-    Field("PatternName"),
+    Field("FabricPattern"),
     Field("StorageLocation"),
     Field("MinimumWidth", "length", width=6),
     Field("MaximumWidth", "length", width=6),
@@ -67,7 +67,7 @@ NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "BackWidth", "
                              "Revision", "RecordCount", "Def", "Use",
                              "FinishedWidth", "FinishedLength", "Scale", "NumberInBlock"))
 LIST_COLUMNS = (
-    "ID", "FabricName", "Color", "PatternName", "UsableWidth", "UsableLength",
+    "ID", "FabricName", "Color", "FabricPattern", "UsableWidth", "UsableLength",
     "GrainDirection", "PrintDirection", "StorageLocation", "Status",
 )
 SORT_FIELDS = (*LIST_COLUMNS, "DateCreated", "DateModified")

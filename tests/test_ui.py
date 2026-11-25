@@ -81,7 +81,7 @@ class ScreenTests(unittest.TestCase):
 
     def test_form_round_trip_assigns_every_field_and_preserves_exact_lengths(self):
         values = fabric(
-            FabricName="Green cotton", Color="Sage", PatternName="Vines", UsableWidth="40 1/64",
+            FabricName="Green cotton", Color="Sage", FabricPattern="Vines", UsableWidth="40 1/64",
             UsableLength="64.123456", GrainDirection="Along Width", PrintDirection="Non-directional",
             StorageLocation="Bin A", Notes="All fields assigned.",
         )
@@ -549,7 +549,7 @@ class ScreenTests(unittest.TestCase):
 
     def test_dropdown_add_item_cancel_validation_order_and_default_form_values(self):
         widget = self.app.form.widgets["Color"]
-        for name in ("FabricName", "Color", "PatternName", "StorageLocation"):
+        for name in ("FabricName", "Color", "FabricPattern", "StorageLocation"):
             self.assertEqual(self.app.form.widgets[name].cget("values")[0], ADD_ITEM)
         def enter_item(response):
             self.app.form.variables["Color"].set(ADD_ITEM)
@@ -578,6 +578,67 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.form.variables["Color"].get(), "Sage")
         self.assertEqual(self.app.form.widgets["Color"].cget("values")[:2], ("Sage", ADD_ITEM))
         self.assertEqual(self.app.form.variables["FabricName"].get(), "Choose FabricName")
+
+    def test_add_item_position_tracks_originating_field_and_nested_dialog(self):
+        self.root.geometry("850x600+30+40")
+        self.root.deiconify()
+        self.root.update()
+
+        def verify_position(form, name):
+            widget = form.widgets[name]
+            form.variables[name].set(ADD_ITEM)
+            widget.event_generate("<<ComboboxSelected>>")
+            self.root.update()
+            window = self.app.dialogs[-1]
+            expected_x = max(0, min(widget.winfo_rootx() + widget.winfo_width(),
+                                    window.winfo_screenwidth() - window.winfo_width()))
+            expected_y = max(0, min(widget.winfo_rooty() + widget.winfo_height(),
+                                    window.winfo_screenheight() - window.winfo_height()))
+            self.assertEqual((window.winfo_x(), window.winfo_y()), (expected_x, expected_y))
+            self.click(window, "Cancel")
+
+        for name in ("FabricName", "Color", "FabricPattern", "StorageLocation"):
+            with self.subTest(field=name):
+                verify_position(self.app.form, name)
+        self.assertEqual(self.app.form.labels["FabricPattern"].cget("text"), "Fabric Pattern")
+        self.assertEqual(self.app.form.variables["FabricPattern"].get(), "Choose Fabric Pattern")
+        self.root.geometry(f"850x600+{self.root.winfo_screenwidth() - 150}"
+                           f"+{self.root.winfo_screenheight() - 150}")
+        self.root.update()
+        verify_position(self.app.form, "FabricPattern")
+        self.root.geometry("850x600+30+40")
+        self.root.update()
+        self.app.open_filter()
+        self.root.update()
+        filter_form = self.app.dialog_forms[self.app.dialogs[-1]][0]
+        verify_position(filter_form, "Color")
+        self.app.dialogs[-1].destroy()
+
+    def test_fabric_pattern_name_in_dropdown_and_help_maintenance(self):
+        self.db.add_dropdown_item("FabricPattern", "Floral")
+        self.app.show_screen("DropDown")
+        form = self.app.dropdown_form
+        self.assertIn("Fabric Pattern", form.widgets["FieldName"].cget("values"))
+        form.variables["FieldName"].set("Fabric Pattern")
+        form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        item = self.db.dropdown_rows("FabricPattern")[0]
+        self.assertEqual(self.app.dropdown_list.tree.item(str(item["ID"]), "values")[2], "Fabric Pattern")
+
+        self.app.show_screen("HelpText")
+        row = next(row for row in self.app.help_rows
+                   if (row["TableName"], row["FieldName"]) == ("Fabric", "FabricPattern"))
+        self.assertEqual(self.app.help_list.tree.item(str(row["ID"]), "values")[2], "Fabric Pattern")
+        self.app.help_list.tree.selection_set(str(row["ID"]))
+        self.root.update()
+        self.assertEqual(self.app.help_form.variables["FieldName"].get(), "Fabric Pattern")
+        self.app.help_form.variables["HoverText"].set("Custom fabric pattern help")
+        self.click(self.app.help_page, "Update")
+        self.assertEqual(self.db.help_pair("Fabric", "FabricPattern")[0], "Custom fabric pattern help")
+        matches = self.db.help_rows({"TableName": "", "FieldName": "fabric pattern",
+                                    "HoverText": "", "FullText": ""})
+        self.assertTrue(any(row["FieldName"] == "FabricPattern" for row in matches))
+        self.errors.assert_not_called()
 
     def test_dropdown_setup_sets_default_without_changing_existing_record(self):
         piece_id = self.add_piece(Color="Blue")
@@ -675,7 +736,7 @@ class ScreenTests(unittest.TestCase):
         self.app.dropdown_list.tree.selection_set(str(sage["ID"]))
         self.root.update()
         self.assertEqual(self.app.dropdown_list.tree.selection(), (str(blue["ID"]),))
-        form.variables["FieldName"].set("PatternName")
+        form.variables["FieldName"].set("FabricPattern")
         form.widgets["FieldName"].event_generate("<<ComboboxSelected>>")
         self.root.update()
         self.assertEqual(form.variables["FieldName"].get(), "Color")
@@ -1028,7 +1089,7 @@ class ScreenTests(unittest.TestCase):
 
     def test_dropdown_show_everything_maintains_actual_scope_and_all_rows(self):
         blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
-        amber, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Amber", 0, 0)
+        amber, _ = self.db.save_dropdown("FabricPiece", "FabricPattern", "Amber", 0, 0)
         self.app.show_screen("DropDown")
         form = self.app.dropdown_form
         form.variables["TableName"].set(ALL_DROPDOWN_SCOPE[0])
@@ -1083,7 +1144,7 @@ class ScreenTests(unittest.TestCase):
     def test_dropdown_show_everything_preserves_default_and_sort_scopes(self):
         red, _ = self.db.save_dropdown("FabricPiece", "Color", "Red", 1, 1)
         blue, _ = self.db.save_dropdown("FabricPiece", "Color", "Blue", 0, 1)
-        pattern, _ = self.db.save_dropdown("FabricPiece", "PatternName", "Floral", 1, 1)
+        pattern, _ = self.db.save_dropdown("FabricPiece", "FabricPattern", "Floral", 1, 1)
         self.db.save_sort((("ListItem", "desc"),), "DropDownSort")
         self.app.show_screen("DropDown")
         form = self.app.dropdown_form
@@ -1164,7 +1225,7 @@ class ScreenTests(unittest.TestCase):
         form.variables["SavedSet"].set(form.widgets["SavedSet"].cget("values")[1])
         self.click(self.app.dialogs[-1], "Apply Saved")
         self.assertEqual(self.app.dropdown_list.tree.get_children(), (str(sage),))
-        self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
+        self.assertEqual(self.db.sets("DropDown", "FabricPattern"), [])
         self.errors.assert_not_called()
 
     def test_quilt_back_plan_preview_cut_confirmation_and_inventory_adjustment(self):

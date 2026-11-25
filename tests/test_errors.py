@@ -156,6 +156,7 @@ class ErrorMessageTests(unittest.TestCase):
                           "ErrorMessageMember", "ErrorMessageSet", "ErrorMessage"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             downgrade_dropdown_schema(self.db.connection)
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 3")
         tables = ("FabricPiece", "FabricHistory", "SelectionSet", "SelectionMember",
                   "ErrorText", "Dropdown", "HelpText", "ScreenState")

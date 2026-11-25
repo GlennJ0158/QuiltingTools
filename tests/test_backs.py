@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -70,6 +71,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
                  "Backing target width and length each add twice this value to the quilt dimensions."),
             )
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 12")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -81,6 +83,33 @@ class QuiltBackPlanningTests(unittest.TestCase):
         self.assertIn("left and right", self.db.help_pair("Quilt Backs", "SideMargin")[0])
         with sqlite3.connect(self.db.upgrade_backup) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 12)
+
+    def test_v13_upgrade_renames_cut_snapshot_keys(self):
+        source_id = self.add_piece(FabricPattern="Floral", UsableWidth="100", UsableLength="100")
+        layout = generate_layouts([self.db.get_piece(source_id)], 40 * INCH, 40 * INCH, 0, 0)[0]
+        back_id = self.db.save_back_draft("Back", 40 * INCH, 40 * INCH, 0, 0, layout)
+        self.db.confirm_back_cut(back_id, {source_id: None})
+        with self.db.connection:
+            row = self.db.connection.execute(
+                "SELECT BeforeValues, AfterValues FROM QuiltBackCutSource WHERE QuiltBackID=?", (back_id,)).fetchone()
+            snapshots = []
+            for text in row:
+                snapshot = json.loads(text)
+                snapshot["PatternName"] = snapshot.pop("FabricPattern")
+                snapshots.append(json.dumps(snapshot))
+            self.db.connection.execute(
+                "UPDATE QuiltBackCutSource SET BeforeValues=?, AfterValues=? WHERE QuiltBackID=?",
+                (*snapshots, back_id))
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            self.db.connection.execute("PRAGMA user_version=13")
+        self.db.close()
+        self.db = Database(self.path, upgrade=True)
+        row = self.db.connection.execute(
+            "SELECT BeforeValues, AfterValues FROM QuiltBackCutSource WHERE QuiltBackID=?", (back_id,)).fetchone()
+        for text in row:
+            snapshot = json.loads(text)
+            self.assertEqual(snapshot["FabricPattern"], "Floral")
+            self.assertNotIn("PatternName", snapshot)
 
     def test_equal_strip_candidates_include_seam_allowance_and_grain_mix(self):
         pieces = [
@@ -219,6 +248,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             downgrade_dropdown_schema(self.db.connection)
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -266,6 +296,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             connection.execute("DROP TABLE NewSet")
             downgrade_dropdown_schema(connection)
             connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             connection.execute("PRAGMA user_version = 6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -312,6 +343,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE QuiltBackPanel")
             self.db.connection.execute("ALTER TABLE QuiltBackPanelOld RENAME TO QuiltBackPanel")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 11")
         self.db.close()
         with self.assertRaises(UpgradeRequired):

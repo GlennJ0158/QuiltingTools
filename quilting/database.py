@@ -25,7 +25,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 BLOCK_SCHEMA = """
 CREATE TABLE QuiltBlock (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,7 +213,7 @@ CREATE TABLE FabricPiece (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
     FabricName TEXT NOT NULL CHECK(length(trim(FabricName)) BETWEEN 1 AND 120),
     Color TEXT CHECK(Color IS NULL OR length(Color) <= 120),
-    PatternName TEXT CHECK(PatternName IS NULL OR length(PatternName) <= 120),
+    FabricPattern TEXT CHECK(FabricPattern IS NULL OR length(FabricPattern) <= 120),
     UsableWidth INTEGER NOT NULL CHECK(typeof(UsableWidth) = 'integer'
         AND UsableWidth BETWEEN 1 AND 100000000000),
     UsableLength INTEGER NOT NULL CHECK(typeof(UsableLength) = 'integer'
@@ -397,6 +397,8 @@ class Database:
             if version < 3 and table == "HelpText":
                 continue
             columns = tuple(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
+            if table == "FabricPiece" and version < 14:
+                expected = tuple("PatternName" if name == "FabricPattern" else name for name in expected)
             if table == "Dropdown" and version < 11:
                 expected = expected[:-1]
             if table == "QuiltBack" and version < 13:
@@ -442,6 +444,7 @@ class Database:
                 self.connection.execute("INSERT INTO WorkingListMember SELECT * FROM OldWorkingListMember")
                 self.connection.execute("DROP TABLE OldWorkingListMember")
                 self.connection.execute("DROP TABLE OldWorkingListSet")
+            self._upgrade_fabric_pattern()
             if version >= 5:
                 self._upgrade_dropdown_scopes(version)
             if 2 <= version < 8:
@@ -488,6 +491,91 @@ class Database:
         finally:
             self.connection.execute("PRAGMA foreign_keys = ON")
 
+    def _upgrade_fabric_pattern(self):
+        self.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN PatternName TO FabricPattern")
+        self.connection.execute(
+            "UPDATE Dropdown SET FieldName = 'FabricPattern' "
+            "WHERE TableName = 'FabricPiece' AND FieldName = 'PatternName'")
+        defaults = default_help()
+        for row in self.connection.execute(
+                "SELECT ID, TableName, FieldName, HoverText, FullText FROM HelpText "
+                "WHERE FieldName IN ('PatternName', 'Column:PatternName')").fetchall():
+            new_name = row["FieldName"].replace("PatternName", "FabricPattern")
+            pair = defaults.get((row["TableName"], new_name))
+            hover, full = row["HoverText"], row["FullText"]
+            if pair:
+                old_pair = tuple(text.replace("Choose Fabric Pattern", "Choose PatternName")
+                                 .replace("FabricPattern", "PatternName")
+                                 .replace("fabric pattern", "pattern name")
+                                 .replace("Fabric Pattern", "Pattern Name") for text in pair)
+                hover = pair[0] if hover == old_pair[0] else hover
+                full = pair[1] if full == old_pair[1] else full
+            self.connection.execute(
+                "UPDATE HelpText SET FieldName = ?, HoverText = ?, FullText = ? WHERE ID = ?",
+                (new_name, hover, full, row["ID"]))
+        saved = self.connection.execute(
+            "SELECT StateValues FROM ScreenState WHERE ScreenName = 'FabricInventorySort'").fetchone()
+        if saved:
+            try:
+                order = json.loads(saved["StateValues"])
+                order = [("FabricPattern" if field == "PatternName" else field, direction)
+                         for field, direction in order]
+                order = normalize_sort(order)
+            except (ValueError, TypeError) as error:
+                raise FieldError("DatabaseFormat", "Sort", detail=f"Saved sort is invalid: {error}") from error
+            self.connection.execute(
+                "UPDATE ScreenState SET StateValues = ? WHERE ScreenName = 'FabricInventorySort'",
+                (json.dumps(order),))
+        for table in ("FabricHistory", "QuiltBackCutSource"):
+            for row in self.connection.execute(
+                    f"SELECT rowid AS snapshot_rowid, BeforeValues, AfterValues FROM {table}").fetchall():
+                values = []
+                changed = False
+                for text in (row["BeforeValues"], row["AfterValues"]):
+                    if text is None:
+                        values.append(None)
+                        continue
+                    try:
+                        snapshot = json.loads(text)
+                    except (TypeError, ValueError) as error:
+                        raise FieldError("DatabaseFormat", table, detail=f"Invalid saved snapshot: {error}") from error
+                    if not isinstance(snapshot, dict):
+                        raise FieldError("DatabaseFormat", table, detail="Invalid saved snapshot.")
+                    if "PatternName" in snapshot:
+                        snapshot = self._rename_pattern_snapshot(snapshot, table)
+                        text = json.dumps(snapshot)
+                        changed = True
+                    values.append(text)
+                if changed:
+                    self.connection.execute(
+                        f"UPDATE {table} SET BeforeValues = ?, AfterValues = ? WHERE rowid = ?",
+                        (*values, row["snapshot_rowid"]))
+        for row in self.connection.execute("SELECT ID, PlanData FROM QuiltPlan").fetchall():
+            try:
+                plan = json.loads(row["PlanData"])
+                sources = plan["sources"]
+                if not isinstance(sources, list):
+                    raise ValueError("Plan sources must be a list.")
+                changed = False
+                for entry in sources:
+                    source = entry["source"]
+                    if not isinstance(source, dict):
+                        raise ValueError("Plan source must be an object.")
+                    if "PatternName" in source:
+                        entry["source"] = self._rename_pattern_snapshot(source, "QuiltPlan")
+                        changed = True
+            except (TypeError, ValueError, KeyError) as error:
+                raise FieldError("DatabaseFormat", "QuiltPlan", detail=f"Invalid saved plan: {error}") from error
+            if changed:
+                self.connection.execute("UPDATE QuiltPlan SET PlanData = ? WHERE ID = ?",
+                                        (json.dumps(plan), row["ID"]))
+
+    @staticmethod
+    def _rename_pattern_snapshot(snapshot, table):
+        if "FabricPattern" in snapshot:
+            raise FieldError("DatabaseFormat", table, detail="Conflicting fabric pattern keys.")
+        return {("FabricPattern" if key == "PatternName" else key): value for key, value in snapshot.items()}
+
     def _upgrade_dropdown_schema(self, version):
         self.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
         self.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownPrevious")
@@ -511,6 +599,8 @@ class Database:
                 scope = ("FabricPiece", scope)
             elif isinstance(scope, list):
                 scope = tuple(scope)
+            if scope == ("FabricPiece", "PatternName"):
+                scope = ("FabricPiece", "FabricPattern")
             if (not isinstance(scope, tuple) or len(scope) != 2
                     or not all(isinstance(part, str) for part in scope)
                     or scope[1] not in DROPDOWN_SCOPE_FIELDS.get(scope[0], ())):
@@ -523,7 +613,7 @@ class Database:
     def _upgrade_fabric_nullability(self):
         columns = ", ".join(FABRIC_NAMES)
         values = ", ".join(
-            f"NULLIF({name}, '')" if name in ("Color", "PatternName", "StorageLocation") else name
+            f"NULLIF({name}, '')" if name in ("Color", "FabricPattern", "StorageLocation") else name
             for name in FABRIC_NAMES
         )
         self.connection.execute("""
@@ -531,7 +621,7 @@ class Database:
         ID INTEGER PRIMARY KEY AUTOINCREMENT,
         FabricName TEXT NOT NULL CHECK(length(trim(FabricName)) BETWEEN 1 AND 120),
         Color TEXT CHECK(Color IS NULL OR length(Color) <= 120),
-        PatternName TEXT CHECK(PatternName IS NULL OR length(PatternName) <= 120),
+        FabricPattern TEXT CHECK(FabricPattern IS NULL OR length(FabricPattern) <= 120),
         UsableWidth INTEGER NOT NULL CHECK(typeof(UsableWidth) = 'integer'
             AND UsableWidth BETWEEN 1 AND 100000000000),
         UsableLength INTEGER NOT NULL CHECK(typeof(UsableLength) = 'integer'
@@ -741,8 +831,13 @@ class Database:
         clauses, args = [], []
         for name, value in clean.items():
             if value:
-                clauses.append(f'instr(lower("{name}"), lower(?)) > 0')
-                args.append(value)
+                if name == "FieldName":
+                    clauses.append("(instr(lower(FieldName), lower(?)) > 0 OR "
+                                   "instr(lower(replace(FieldName, 'FabricPattern', 'Fabric Pattern')), lower(?)) > 0)")
+                    args.extend((value, value))
+                else:
+                    clauses.append(f'instr(lower("{name}"), lower(?)) > 0')
+                    args.append(value)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         sql_order = ", ".join(f'"{name}" COLLATE NOCASE {direction}' for name, direction in order)
         rows = [dict(row) for row in self.connection.execute(
@@ -840,7 +935,7 @@ class Database:
     def add_dropdown_item(self, name, value, default=False, clear_other_defaults=False):
         if not isinstance(value, str) or not value.strip():
             raise FieldError("Required", name)
-        if value.strip().casefold() == f"choose {name}".casefold():
+        if value.strip().casefold() == self.dropdown_placeholder(name).casefold():
             raise FieldError("Choice", name)
         with self._write_transaction():
             stored = self._dropdown_item(name, value, reactivate=True)
@@ -885,6 +980,19 @@ class Database:
 
     def has_dropdown_list(self, table_name, field_name):
         return field_name in DROPDOWN_SCOPE_FIELDS.get(table_name, ())
+
+    def dropdown_placeholder(self, name):
+        if name != "FabricPattern":
+            return f"Choose {name}"
+        used = {row[0].casefold() for row in self.connection.execute(
+            "SELECT ListItem FROM Dropdown WHERE TableName = 'FabricPiece' AND FieldName = ?", (name,))}
+        base = "Choose Fabric Pattern"
+        candidate = base
+        index = 2
+        while candidate.casefold() in used:
+            candidate = f"{base} ({index})"
+            index += 1
+        return candidate
 
     def dropdown_items(self, table_name, field_name):
         if not self.has_dropdown_list(table_name, field_name):
@@ -1017,7 +1125,9 @@ class Database:
                 raise FieldError("Database", "ListItem", detail="This value is not a supported system choice.")
             if clean.casefold() == ADD_ITEM.casefold():
                 raise FieldError("Choice", "ListItem")
-            if clean.casefold() == f"choose {field_name}".casefold():
+            placeholder = (self.dropdown_placeholder(field_name) if table_name == "FabricPiece"
+                           else f"Choose {field_name}")
+            if clean.casefold() == placeholder.casefold():
                 raise FieldError("Choice", "ListItem")
             if table_name == "FabricPiece" and field_name in DROPDOWN_FIELDS and (
                     clean or row is None or row["ListItem"] != ""):
@@ -1441,7 +1551,7 @@ class Database:
         if set(values) != set(FABRIC_NAMES):
             validate_fields(FABRIC_FIELDS, values)
         values = {
-            name: "" if values[name] is None and name in ("Color", "PatternName", "StorageLocation")
+            name: "" if values[name] is None and name in ("Color", "FabricPattern", "StorageLocation")
             else values[name] for name in FABRIC_NAMES
         }
         clean = self._validate_fields(FABRIC_FIELDS, values, "FabricPiece")
@@ -1696,7 +1806,7 @@ class Database:
         if set(values) != set(FABRIC_NAMES):
             raise FieldError("Binding", "FabricPiece")
         clean = {
-            name: "" if values[name] is None and name in ("Color", "PatternName", "StorageLocation")
+            name: "" if values[name] is None and name in ("Color", "FabricPattern", "StorageLocation")
             else values[name] for name in FABRIC_NAMES
         }
         for name in DROPDOWN_FIELDS:
@@ -1737,7 +1847,7 @@ class Database:
         clean = validate_fields(FILTER_FIELDS, values)
         order = normalize_sort(sort)
         clauses, args = [], []
-        for name in ("FabricName", "Color", "PatternName", "StorageLocation"):
+        for name in ("FabricName", "Color", "FabricPattern", "StorageLocation"):
             if clean[name]:
                 clauses.append(f"instr(lower({name}), lower(?)) > 0")
                 args.append(clean[name])

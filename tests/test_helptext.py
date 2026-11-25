@@ -84,7 +84,7 @@ class HelpTextTests(unittest.TestCase):
     def test_additional_working_lists_filter_sort_and_scope_saved_sets(self):
         self.db.add_dropdown_item("Color", "Blue")
         self.db.add_dropdown_item("Color", "Sage")
-        self.db.add_dropdown_item("PatternName", "Blue")
+        self.db.add_dropdown_item("FabricPattern", "Blue")
         dropdown_ids = {row["ListItem"]: row["ID"] for row in self.db.dropdown_rows("Color")}
         sage = dropdown_ids["Sage"]
         dropdown_filter = {"ListItem": "a", "Default": ""}
@@ -94,9 +94,9 @@ class HelpTextTests(unittest.TestCase):
         self.assertEqual(self.db.load_sort("DropDownSort"), (("ListItem", "desc"), ("ID", "asc")))
         color_set = self.db.save_set("Only Sage", [sage], "DropDown", "Color")
         self.assertEqual(self.db.set_members(color_set, "DropDown", "Color"), [sage])
-        self.assertEqual(self.db.sets("DropDown", "PatternName"), [])
+        self.assertEqual(self.db.sets("DropDown", "FabricPattern"), [])
         with self.assertRaises(FieldError):
-            self.db.set_members(color_set, "DropDown", "PatternName")
+            self.db.set_members(color_set, "DropDown", "FabricPattern")
 
         help_rows = self.db.help_rows({"TableName": "History", "FieldName": "", "HoverText": "", "FullText": ""})
         self.assertTrue(help_rows)
@@ -135,6 +135,7 @@ class HelpTextTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE WorkingListMember")
             self.db.connection.execute("DROP TABLE WorkingListSet")
             downgrade_dropdown_schema(self.db.connection)
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 4")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -186,6 +187,7 @@ class HelpTextTests(unittest.TestCase):
                 "UPDATE WorkingListSet SET ScopeName = 'Color' WHERE ID = ?", (set_id,))
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         self.db = Database(self.path, upgrade=True)
@@ -234,6 +236,7 @@ class HelpTextTests(unittest.TestCase):
                 "CREATE UNIQUE INDEX DropdownDefaultIndex ON Dropdown(TableName, FieldName) "
                 "WHERE Def = 1 AND Use = 1")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 7")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -263,6 +266,7 @@ class HelpTextTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP TABLE HelpText")
             downgrade_dropdown_schema(self.db.connection)
+            self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
             self.db.connection.execute("PRAGMA user_version = 2")
         tables = ("FabricPiece", "FabricHistory", "Dropdown", "ErrorText")
         before = {name: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {name}")]
