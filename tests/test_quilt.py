@@ -6,6 +6,7 @@ from pathlib import Path
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
 from quilting.quilt_report import cutting_list_description
+from quilting.quilt_planner import PlanningCancelled
 from quilting.quilt_ui import QuiltScreenMixin
 from tests.test_blocks import block, part
 from tests.test_inventory import downgrade_color_value_schema, fabric
@@ -26,6 +27,135 @@ class QuiltPlanningTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         self.temp.cleanup()
+
+    def make_rule_quilt(self, mode, groups=None):
+        block_id = self.db.add_block(block(BlockName="Rules"))
+        small_part = self.db.save_block_part(block_id, 1, part(
+            PartName="Small", NumberInBlock="1", PartWidth="4"))
+        large_part = self.db.save_block_part(block_id, 2, part(
+            PartName="Large", NumberInBlock="1", PartWidth="6"))
+        placements = self.db.block_placements(block_id)
+        large_place = next(p for p in placements if p["BlockPartID"] == large_part)
+        self.db.save_block_placement(block_id, 3, large_place["ID"], 4_000_000, 0, 0, False)
+        group_map = {p["ID"]: groups[p["BlockPartID"]] for p in placements} if groups else {}
+        self.db.save_block_fabric_rule(block_id, 4, mode, group_map)
+        self.db.approve_block(block_id, 5)
+        quilt = self.db.add_quilt("Rules quilt")
+        self.db.set_quilt_use(quilt, 1, block_id, 1)
+        return quilt, block_id, small_part, large_part, placements
+
+    def test_distinct_uses_smallest_fitting_sources_in_decreasing_part_size(self):
+        quilt, _, small_part, large_part, _ = self.make_rule_quilt("Distinct")
+        too_small = self.db.save_piece(fabric(FabricName="Tiny", Color="Red",
+                                              UsableWidth="5", UsableLength="11"))
+        middle = self.db.save_piece(fabric(FabricName="Middle", Color="Red",
+                                           UsableWidth="7", UsableLength="11"))
+        self.db.save_piece(fabric(FabricName="Large", Color="Red", UsableWidth="20", UsableLength="20"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, 3))["PlanData"]
+        selected = {cut["part_id"]: entry["source"]["ID"] for entry in plan["sources"] for cut in entry["cuts"]}
+        self.assertEqual(selected, {large_part: middle, small_part: too_small})
+        self.assertFalse(plan["missing"])
+
+    def test_reuse_prompts_without_lock_preserves_prior_choices_and_cancel_saves_nothing(self):
+        quilt, _, small_part, large_part, _ = self.make_rule_quilt("Distinct")
+        first = self.db.save_piece(fabric(FabricName="One", Color="Red", UsableWidth="11", UsableLength="22"))
+        self.db.save_piece(fabric(FabricName="one", Color="Red", UsableWidth="12", UsableLength="22"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        events = []
+
+        def allow(item):
+            events.append(item["part_name"])
+            other = Database(self.db.path)
+            try:
+                other.add_quilt("No lock held")
+            finally:
+                other.close()
+            return True
+
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, 3, reuse_decision=allow))["PlanData"]
+        self.assertEqual(events, ["Small"])
+        cuts = {cut["part_id"]: entry["source"]["ID"] for entry in plan["sources"] for cut in entry["cuts"]}
+        self.assertEqual(cuts[large_part], first)
+        self.assertIn(small_part, cuts)
+        count = len(self.db.quilt_plans(quilt))
+        with self.assertRaises(PlanningCancelled):
+            self.db.create_quilt_plan(quilt, 3, reuse_decision=lambda item: False)
+        self.assertEqual(len(self.db.quilt_plans(quilt)), count)
+        self.assertFalse(self.db.connection.in_transaction)
+
+    def test_grouped_positions_use_same_name_across_pieces_and_enforce_restrictions(self):
+        quilt, block_id, small_part, large_part, placements = self.make_rule_quilt("Grouped")
+        groups = {p["ID"]: "Mirror" for p in placements}
+        copy_id = self.db.copy_block(block_id)
+        copied = self.db.block_placements(copy_id)
+        self.db.save_block_fabric_rule(copy_id, 1, "Grouped", {p["ID"]: "Mirror" for p in copied})
+        self.assertEqual(set(self.db.block_fabric_rule(copy_id)["groups"].values()), {"Mirror"})
+        # Groups can span different part definitions, even when each must use a different piece.
+        original = self.db.connection.execute("SELECT Revision FROM QuiltBlock WHERE ID=?", (block_id,)).fetchone()[0]
+        with self.assertRaises(FieldError):
+            self.db.save_block_fabric_rule(block_id, original, "Grouped", groups)
+        quilt2 = self.db.add_quilt("Grouped")
+        self.db.approve_block(copy_id, 2)
+        self.db.set_quilt_use(quilt2, 1, copy_id, 1)
+        first = self.db.save_piece(fabric(FabricName="Same", Color="Red", UsableWidth="7", UsableLength="11"))
+        second = self.db.save_piece(fabric(FabricName="same", Color="Red", UsableWidth="5", UsableLength="11"))
+        self.db.save_piece(fabric(FabricName="Different", Color="Red", UsableWidth="5", UsableLength="11"))
+        self.db.add_quilt_mapping(quilt2, 2, "Red", "Red")
+        copied_parts = self.db.block_parts(copy_id)
+        self.db.save_quilt_part_fabrics(quilt2, 3, copy_id,
+                                        {copied_parts[0]["ID"]: [second], copied_parts[1]["ID"]: [first]})
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt2, 4))["PlanData"]
+        self.assertEqual({entry["source"]["ID"] for entry in plan["sources"]}, {first, second})
+        self.assertFalse(plan["missing"])
+        self.db.save_quilt_part_fabrics(quilt2, 4, copy_id,
+                                        {copied_parts[0]["ID"]: [second], copied_parts[1]["ID"]: [second]})
+        with self.assertRaises(FieldError):
+            self.db.create_quilt_plan(quilt2, 5)
+        self.assertEqual(len(self.db.quilt_plans(quilt2)), 1)
+
+    def test_changes_during_prompt_invalidate_snapshot(self):
+        quilt, _, _, _, _ = self.make_rule_quilt("Distinct")
+        source = self.db.save_piece(fabric(FabricName="Only", Color="Red",
+                                           UsableWidth="12", UsableLength="22"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+
+        def change_inventory(_item):
+            other = Database(self.db.path)
+            try:
+                other.save_piece(fabric(FabricName="Only", Color="Red", UsableWidth="13", UsableLength="22"),
+                                 source, 1)
+            finally:
+                other.close()
+            return True
+
+        with self.assertRaises(FieldError) as error:
+            self.db.create_quilt_plan(quilt, 3, reuse_decision=change_inventory)
+        self.assertIn("changed during planning", error.exception.details["detail"])
+        self.assertEqual(self.db.quilt_plans(quilt), [])
+        self.assertFalse(self.db.connection.in_transaction)
+
+    def test_used_markers_are_independent_per_block_copy(self):
+        quilt, block_id, _, _, _ = self.make_rule_quilt("Distinct")
+        self.db.save_piece(fabric(FabricName="Only", Color="Red", UsableWidth="30", UsableLength="30"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        self.db.set_quilt_use(quilt, 3, block_id, 2)
+        prompts = []
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(
+            quilt, 4, reuse_decision=lambda item: prompts.append(item["block_number"]) or True))["PlanData"]
+        self.assertEqual(prompts, [1, 2])
+        self.assertEqual(sum(len(source["cuts"]) for source in plan["sources"]), 4)
+
+    def test_exhausted_inventory_cancels_without_requesting_reuse(self):
+        quilt, _, _, _, _ = self.make_rule_quilt("Distinct")
+        self.db.save_piece(fabric(FabricName="Only", Color="Red", UsableWidth="7", UsableLength="11"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        prompts = []
+        with self.assertRaises(FieldError) as error:
+            self.db.create_quilt_plan(quilt, 3, reuse_decision=lambda item: prompts.append(item) or True)
+        self.assertIn("No plan was saved", error.exception.details["detail"])
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.db.quilt_plans(quilt), [])
 
     def test_part_assignments_restrict_mapping_persist_and_leave_saved_plan_unchanged(self):
         red_a = self.db.save_piece(fabric(FabricName="A", Color="Red", UsableWidth="12", UsableLength="22"))

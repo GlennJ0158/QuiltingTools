@@ -72,6 +72,9 @@ SCREEN_HELP = {
     "Block Sketch": ("Arrange each part instance.", "Choose a part instance, enter its unscaled base "
                      "position, rotation and mirror setting, then Save Placement. The displayed sketch "
                      "uses the block scale. Approval requires no overlap, gaps or out-of-bounds areas."),
+    "Fabric Rules": ("Set fabric selection rules for this block.", "Choose Legacy, Distinct, or Grouped. "
+                     "Assign the same group name to positions that must share a fabric name; blank "
+                     "positions are independent. Distinct also prefers different names across groups."),
     "Compare Block Sketches": ("Compare selected block layouts.", "Each sketch shows the saved layout "
                                "and its validation status. Close this view and select one block to edit it."),
     "QuiltBlock Filter": ("Filter the block list.", "Match literal name text and optional status."),
@@ -290,6 +293,10 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
+    "FabricRule": ("Choose a fabric selection rule.", "Legacy retains existing behavior; Distinct "
+                   "prefers unique fabrics and Grouped enforces matching groups."),
+    "FabricGroup": ("Name a fabric-sharing group.", "Positions with the same group name must use "
+                    "the same fabric name. Leave blank for an independent position."),
     "BlockPartChoice": ("Choose a block part.", "Select a part by block, name, ID, color and value range "
                         "to review and change its assigned fabric pieces."),
     "ColorValue": ("Choose the fabric's lightness value.", "Optional: 1 is very light and 10 is "
@@ -431,6 +438,9 @@ BUTTON_HELP = {
     "Parts": ("Open part maintenance.", "Add, update or delete part definitions on a draft."),
     "Sketch": ("Open or compare sketches.", "Select one block to edit placements, or highlight multiple "
                "blocks to compare their saved layouts."),
+    "Fabric Rules": ("Edit per-position fabric rules.", "Set the block's selection mode and sharing groups."),
+    "Apply Group": ("Set the selected position's group.", "Use the same name for positions that must share fabric; "
+                    "leave blank to remove a group."),
     "Approve": ("Approve a complete layout.", "Approval requires all instances and no gaps, overlap or overflow."),
     "Save Placement": ("Save the selected placement.", "Persist the part instance position and orientation."),
     "Print Sketch": ("Print this block sketch.", "Save an HTML report at a new filename; "
@@ -535,6 +545,7 @@ SCREEN_FIELDS = {
     "Block Parts": PART_FIELDS,
     "Block Sketch": (Field("BlockSketch"), Field("Placement"), Field("PositionX"), Field("PositionY"),
                      Field("Rotation"), Field("Mirror")),
+    "Fabric Rules": (Field("FabricRule"), Field("FabricGroup")),
     "Compare Block Sketches": (Field("BlockSketch"),),
     "QuiltBlock Filter": BLOCK_FILTER_FIELDS,
     "QuiltBlock Sort": tuple(field for index in range(1, len(BLOCK_COLUMNS) + 1) for field in (
@@ -601,10 +612,11 @@ SCREEN_BUTTONS = {
               "Eligible Fabrics", "Plan Quilt", "Print Quilt Plan"),
     "Eligible Fabrics": ("Assign Fabric to Part", "Remove Assignment", "Save Selection and Return", "Cancel"),
     "QuiltBlock": ("Add", "Update", "Create from Template", "Create", "Cancel", "Delete", "Clear",
-                   "New Version", "Parts", "Sketch", "Approve",
+                   "New Version", "Parts", "Sketch", "Fabric Rules", "Approve",
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Block Parts": ("Add", "Update", "Delete", "Clear", "Close"),
     "Block Sketch": ("Save Placement", "Print Sketch", "Close"),
+    "Fabric Rules": ("Apply Group", "Save Selection and Return", "Cancel"),
     "Compare Block Sketches": ("Close",),
     "QuiltBlock Filter": ("Apply", "Clear Fields", "Cancel"),
     "QuiltBlock Sort": ("Apply", "Clear Fields", "Cancel"),
