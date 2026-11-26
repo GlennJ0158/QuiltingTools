@@ -82,15 +82,10 @@ def _specs_for_template(name, width, length):
             rectangle(part_name, color, x0, y0, x1, y1)
 
     elif name == "Log Cabin (Spiral)":
-        center = min(width, length) // 5
-
-        def boundaries(size):
-            start = (size - center) // 2
-            end = start + center
-            return (0, start // 2, start, end, end + (size - end) // 2, size)
-
-        xs, ys = boundaries(width), boundaries(length)
-        add("Center", "Square", "Yellow", {"PartWidth": center, "PartLength": center}, xs[2], ys[2])
+        xs, ys = _integer_grid(width, 5), _integer_grid(length, 5)
+        center_width, center_length = xs[3] - xs[2], ys[3] - ys[2]
+        add("Center", "Square" if center_width == center_length else "Rectangle", "Yellow",
+            {"PartWidth": center_width, "PartLength": center_length}, xs[2], ys[2])
         logs = (
             ("Inner right log", "Black", 7, 10, 3, 2, 4, 3),
             ("Inner bottom log", "Black", 7, 10, 2, 3, 4, 4),
