@@ -10,6 +10,32 @@ ERROR_FIELDS = (
 ERROR_COLUMNS = ("ID", *(field.name for field in ERROR_FIELDS))
 ERROR_FILTER_FIELDS = tuple(Field(field.name, limit=field.limit) for field in ERROR_FIELDS)
 
+BLOCK_CONFLICT_MESSAGES = {
+    "approved": (
+        "This block is Approved and cannot be changed.",
+        "To edit it, close any open block dialog, select the block, and choose New Version. "
+        "Confirm discarding any unsaved details, then edit the new draft; "
+        "the approved version remains unchanged.",
+    ),
+    "stale": (
+        "This block has changed since its details were loaded.",
+        "Copy any unsaved changes elsewhere. Close any open block dialog, choose Refresh, "
+        "and confirm discarding the unsaved details. Select the block again, re-enter your changes, "
+        "and choose Update. Highlighting the already-selected row does not reload it.",
+    ),
+    "unsaved": (
+        "The block has unsaved details and cannot be approved yet.",
+        "Choose Update to save your changes before choosing Approve, or choose Refresh "
+        "and confirm discarding them.",
+    ),
+}
+
+OLD_CONFLICT_REFERENCE = (
+    "1. Another window or application instance saved the record after it was loaded.",
+    "1. Copy any unsaved text elsewhere, refresh and reload the record, then reapply the "
+    "intended changes. Do not overwrite another edit blindly.",
+)
+
 # Numbered fixes correspond to the numbered causes, including dynamic {detail} messages.
 TROUBLESHOOTING = {
     "Required": (
@@ -46,9 +72,15 @@ TROUBLESHOOTING = {
         "2. Reset the selection and select again; restore a verified backup only if data was lost.",
     ),
     "Conflict": (
-        "1. Another window or application instance saved the record after it was loaded.",
-        "1. Copy any unsaved text elsewhere, refresh and reload the record, then reapply the "
-        "intended changes. Do not overwrite another edit blindly.",
+        "1. The record changed after its details were loaded.\n"
+        "2. A Quilt Block is Approved and cannot be edited.\n"
+        "3. A Quilt Block has unsaved details when Approve is selected.",
+        "1. Copy unsaved edits elsewhere, close any dialog, choose Refresh, confirm discarding "
+        "the edits, then select the record again and re-enter them.\n"
+        "2. Select the approved block and choose New Version; confirm discarding unsaved details "
+        "and edit the new draft.\n"
+        "3. Choose Update to save the block details before choosing Approve, or Refresh "
+        "to discard the edits.",
     ),
     "NoHighlight": (
         "1. Select Highlighted was requested without any highlighted rows.",

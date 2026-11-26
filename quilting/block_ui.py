@@ -15,6 +15,10 @@ from .block_templates import BLOCK_TEMPLATES
 from .model import Field, FieldError, UNITS_PER_INCH, caption, display_measurement, normalize_sort, validate_fields
 
 
+def display_scale(value):
+    return format(Decimal(value), "f")
+
+
 def draw_block_sketch(canvas, block, parts, placements):
     scale = float(Decimal(block["Scale"]) / 100)
     width = block["FinishedWidth"] / UNITS_PER_INCH * scale
@@ -48,6 +52,7 @@ class BlockScreenMixin:
             database=self.db, dropdown_scope="QuiltBlock",
         )
         self.block_form.pack(fill="x")
+        self.block_form.labels["Scale"].configure(text="Scale (%)")
         actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
         for label, action in (("Add", self.add_block), ("Update", self.update_block),
@@ -62,12 +67,16 @@ class BlockScreenMixin:
                               ("Set Selection", self.block_sets), ("Sort", self.block_sort),
                               ("Reset Selection", self.block_reset), ("Refresh", self.refresh_blocks_safe)):
             self.button(tools, label, action)
-        self.block_list = RecordList(self.block_page, BLOCK_COLUMNS, name_limit="BlockName")
+        self.block_list = RecordList(
+            self.block_page, BLOCK_COLUMNS, name_limit="BlockName",
+            formatters={"Scale": lambda value: f"{display_scale(value)}%"},
+        )
         font = tkfont.nametofont("TkHeadingFont")
         for name in ("FinishedWidth", "FinishedLength", "Scale", "Status", "Revision"):
             width = font.measure(caption(name) + "00") + 12
             self.block_list.tree.column(name, width=width, minwidth=width, stretch=False)
         self.block_list.compact_columns("BlockName")
+        self.block_list.tree.heading("Scale", text="Scale (%)")
         self.block_list.pack(fill="both", expand=True)
         self.block_list.tree.bind("<<TreeviewSelect>>", self.command(self.select_block))
         self.block_initial = self.block_form.values()
@@ -97,6 +106,12 @@ class BlockScreenMixin:
         rows = self.db.blocks(state["filters"], state["selected_ids"], state["sort"])
         self.clear_block()
         self.block_list.fill(rows, "blocks", state["sort"], self.list_context(state))
+        font = tkfont.nametofont("TkDefaultFont")
+        scale_width = max(
+            [tkfont.nametofont("TkHeadingFont").measure("Scale (%)")]
+            + [font.measure(f"{display_scale(row['Scale'])}%") for row in rows]
+        ) + 18
+        self.block_list.tree.column("Scale", width=scale_width, minwidth=scale_width)
         if prefer is not None and self.block_list.tree.exists(str(prefer)):
             self.block_list.tree.selection_set(str(prefer))
             self.select_block()
@@ -117,6 +132,7 @@ class BlockScreenMixin:
         values = {field.name: row[field.name] for field in BLOCK_FIELDS}
         for name in ("FinishedWidth", "FinishedLength", "SeamAllowance"):
             values[name] = display_measurement(values[name]) if values[name] else "0"
+        values["Scale"] = display_scale(values["Scale"])
         self.block_form.assign(values)
         self.block_initial = self.block_form.values()
         self.block_id, self.block_revision = row["ID"], row["Revision"]
@@ -309,7 +325,6 @@ class BlockScreenMixin:
             listing.fill(rows, "part definitions", (("ID", "asc"),))
             form.defaults()
             self.dialog_forms[window] = (form, form.values())
-            self.block_revision = self.db.get_block(block_id)["Revision"]
 
         def select():
             nonlocal previous_selection
@@ -337,6 +352,7 @@ class BlockScreenMixin:
                 raise FieldError("OneRecord", "BlockPart")
             self.db.save_block_part(block_id, self.block_revision, form.values(),
                                     int(selected[0]) if update else None)
+            self.block_revision += 1
             refresh()
 
         def delete():
@@ -348,6 +364,7 @@ class BlockScreenMixin:
                 return
             if messagebox.askyesno("Delete Part", "Delete this part and its placements?", parent=window):
                 self.db.delete_block_part(block_id, self.block_revision, int(selected[0]))
+                self.block_revision += 1
                 refresh()
 
         def clear():
@@ -458,7 +475,7 @@ class BlockScreenMixin:
                 nonnegative_measurement(values["PositionX"], "PositionX"),
                 nonnegative_measurement(values["PositionY"], "PositionY"),
                 rotation, values["Mirror"] == "Yes")
-            self.block_revision = self.db.get_block(block_id)["Revision"]
+            self.block_revision += 1
             self.dialog_forms[window] = (form, form.values())
             draw()
 
@@ -569,6 +586,8 @@ class BlockScreenMixin:
     def approve_block(self):
         block_id = self.require_block()
         if self.block_form.values() != self.block_initial:
-            raise FieldError("Conflict", "QuiltBlock")
+            if self.db.get_block(block_id)["Status"] != "Draft":
+                raise FieldError("Conflict", "QuiltBlock", reason="approved")
+            raise FieldError("Conflict", "QuiltBlock", reason="unsaved")
         self.db.approve_block(block_id, self.block_revision)
         self.refresh_blocks(block_id)
