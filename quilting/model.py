@@ -28,6 +28,14 @@ def display_fabric_name(name, piece_id):
     return f"{name} ({piece_id})"
 
 
+def display_label_measurement(value):
+    return display_fractional_measurement(value, round_up=True).removeprefix("~")
+
+
+def label_id_font_size(piece_id):
+    return min(52, max(12, 80 // len(str(piece_id))))
+
+
 @dataclass(frozen=True)
 class Field:
     name: str
