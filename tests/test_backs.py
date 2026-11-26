@@ -2,10 +2,11 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from quilting.backs import (
-    INCH, PALETTE, generate_layouts, layout_svg, palette_suggestion, ratio_label,
+    INCH, PALETTE, escaped_legend, generate_layouts, layout_svg, palette_suggestion, ratio_label,
 )
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
@@ -43,6 +44,16 @@ class QuiltBackPlanningTests(unittest.TestCase):
         self.assertIn(PALETTE["Blue"], layout_svg(layout))
         self.assertIn("marker-end", layout_svg(layout))
         self.assertEqual(ratio_label(layout.ratio_tier), "20% target met")
+
+    def test_legend_rounds_cut_up_but_finished_and_origin_to_nearest(self):
+        source_id = self.add_piece(UsableWidth="100", UsableLength="100")
+        layout = generate_layouts([self.db.get_piece(source_id)], 40 * INCH, 40 * INCH, 0, 0)[0]
+        panel = replace(layout.panels[0], finished_width=40_010_000,
+                        cut_width=40_010_000, source_x=10_000)
+        legend = escaped_legend(replace(layout, panels=(panel,)))
+        self.assertIn("~40 × 40 in", legend)
+        self.assertIn("~40 1/16 × 40 in", legend)
+        self.assertIn("~0, 0 in", legend)
 
     def test_separate_margins_are_saved_and_checked(self):
         source_id = self.add_piece(UsableWidth="100", UsableLength="100")

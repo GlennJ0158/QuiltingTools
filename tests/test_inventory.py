@@ -2,12 +2,13 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 from quilting.database import ALL_DROPDOWN_SCOPE, Database, UpgradeRequired
 from quilting.model import (
-    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_measurement,
+    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_fractional_measurement, display_measurement,
     measurement, normalize_sort, validate_fields,
 )
 
@@ -65,6 +66,20 @@ def assert_legacy_rows_preserved(test_case, database, table, rows):
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_fractional_display_rounds_and_reduces(self):
+        examples = (
+            (0, "0", "0"), (250_000, "1/4", "1/4"),
+            (1_500_000, "1 1/2", "1 1/2"), (15_625, "~0", "~1/16"),
+            (31_249, "~0", "~1/16"), (31_250, "~1/16", "~1/16"),
+            (999_999, "~1", "~1"), (1_000_001, "~1", "~1 1/16"),
+            (Decimal("62500.000001"), "~1/16", "~1/8"),
+            (10_800_000_000, "10800", "10800"),
+        )
+        for value, nearest, upward in examples:
+            with self.subTest(value=value):
+                self.assertEqual(display_fractional_measurement(value), nearest)
+                self.assertEqual(display_fractional_measurement(value, round_up=True), upward)
+
     def test_exact_fraction_and_decimal_round_trips(self):
         for value in ("42", "42 1/2", "1/64", "42.125", "0.000001", "0.123456", "10800"):
             with self.subTest(value=value):

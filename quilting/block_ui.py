@@ -12,7 +12,10 @@ from .blocks import (
     BLOCK_COLUMNS, BLOCK_FIELDS, BLOCK_FILTER_FIELDS, PART_FIELDS, cutting_shape, placed_shape, validate_layout,
 )
 from .block_templates import BLOCK_TEMPLATES
-from .model import Field, FieldError, UNITS_PER_INCH, caption, display_measurement, normalize_sort, validate_fields
+from .model import (
+    Field, FieldError, UNITS_PER_INCH, caption, display_fractional_measurement, display_measurement,
+    normalize_sort, validate_fields,
+)
 
 
 def display_scale(value):
@@ -450,8 +453,10 @@ class BlockScreenMixin:
             part = next(part for part in self.db.block_parts(block_id) if part["ID"] == p["BlockPartID"])
             cut = cutting_shape(part, scale, block["SeamAllowance"])
             minx, miny, maxx, maxy = cut.bounds
-            dimensions.configure(text=f"Cut outline bounding size: {maxx - minx:.6f} x "
-                                 f"{maxy - miny:.6f} in (uniform seam offset)")
+            cut_width = display_fractional_measurement(Decimal(str(maxx - minx)) * UNITS_PER_INCH, round_up=True)
+            cut_length = display_fractional_measurement(Decimal(str(maxy - miny)) * UNITS_PER_INCH, round_up=True)
+            dimensions.configure(text=f"Cut outline bounding size: {cut_width} x {cut_length} in "
+                                 "(~ rounded up to 1/16 in; uniform seam offset)")
             for name, value in (("PositionX", display_measurement(p["X"]) if p["X"] else "0"),
                                 ("PositionY", display_measurement(p["Y"]) if p["Y"] else "0"),
                                 ("Rotation", str(p["Rotation"])),
@@ -517,14 +522,16 @@ class BlockScreenMixin:
                     f'<h3>{escape(part["PartName"])} ({part["ID"]}/{p["Instance"]})</h3>'
                     f'<svg xmlns="http://www.w3.org/2000/svg" width="125" height="125">'
                     f'<polygon points="{offset_points}" fill="none" stroke="black"/></svg>')
+                cut_width = display_fractional_measurement(Decimal(str(x2 - x1)) * UNITS_PER_INCH, round_up=True)
+                cut_length = display_fractional_measurement(Decimal(str(y2 - y1)) * UNITS_PER_INCH, round_up=True)
                 lines.append(f'{part["PartName"]} ({part["ID"]}/{p["Instance"]}, {part["Shape"]}, '
-                             f'{part["PartColor"]}): cut outline bounding size {x2 - x1:.6f} x '
-                             f'{y2 - y1:.6f} in')
+                             f'{part["PartColor"]}): cut outline bounding size {cut_width} x {cut_length} in')
             report = ('<!doctype html><html><head><meta charset="utf-8"><title>Block sketch</title>'
                       '<style>body{font-family:sans-serif}pre{white-space:pre-wrap}'
                       '@media print{button{display:none}}</style></head><body>'
                       f'<h1>{escape(current["BlockName"])}</h1>'
                       f'<p>{escape("; ".join(issues) if issues else "Layout is valid.")}</p>'
+                      '<p>~ marks cut dimensions rounded up to 1/16 in.</p>'
                       '<button onclick="window.print()">Print</button>'
                       f'<svg xmlns="http://www.w3.org/2000/svg" width="{width * factor}" '
                       f'height="{length * factor}">{"".join(svg)}</svg>'

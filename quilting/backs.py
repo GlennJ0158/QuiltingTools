@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from html import escape
 
-from .model import FieldError
+from .model import FieldError, display_fractional_measurement
 
 INCH = 1_000_000
 MINIMUM_PART = 5 * INCH
@@ -340,11 +340,14 @@ def escaped_legend(layout):
             "<tr><td>" + str(item["number"]) + "</td>"
             f'<td><span style="display:inline-block;width:1em;height:1em;background:{swatch};'
             'border:1px solid #444"></span> ' + escape(item["palette_color"]) + "</td>"
-                "<td>" + escape(item["fabric_name"]) + " — " + escape(item["inventory_color"]) + "</td>"
-                f'<td>{escape(item["grain_axis"])}</td>'
-            f'<td>{item["finished_width"] / INCH:g} × {item["finished_length"] / INCH:g} in</td>'
-                f'<td>{item["cut_width"] / INCH:g} × {item["cut_length"] / INCH:g} in</td>'
-                f'<td>{item["source_x"] / INCH:g}, {item["source_y"] / INCH:g} in</td></tr>'
+            "<td>" + escape(item["fabric_name"]) + " — " + escape(item["inventory_color"]) + "</td>"
+            f'<td>{escape(item["grain_axis"])}</td>'
+            f'<td>{display_fractional_measurement(item["finished_width"])} × '
+            f'{display_fractional_measurement(item["finished_length"])} in</td>'
+            f'<td>{display_fractional_measurement(item["cut_width"], round_up=True)} × '
+            f'{display_fractional_measurement(item["cut_length"], round_up=True)} in</td>'
+            f'<td>{display_fractional_measurement(item["source_x"])}, '
+            f'{display_fractional_measurement(item["source_y"])} in</td></tr>'
         )
     return (
         "<table><thead><tr><th>Part</th><th>Sketch color</th><th>Inventory fabric</th>"
