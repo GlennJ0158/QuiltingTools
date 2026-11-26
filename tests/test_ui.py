@@ -535,6 +535,37 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(len(self.db.history(second)), 2)
         self.errors.assert_not_called()
 
+    def test_bulk_update_applies_checked_fields_and_can_clear_them(self):
+        self.db.add_dropdown_item("Color", "Blue")
+        first = self.add_piece(
+            FabricName="Blue cotton", Color="Red", UsableWidth="40", Notes="Keep first",
+        )
+        second = self.add_piece(
+            FabricName="Green cotton", Color="Red", UsableWidth="42", Notes="Keep second",
+        )
+        self.app.list.tree.selection_set((str(first), str(second)))
+        self.root.update()
+        self.assertTrue(self.app.form.apply_mode)
+        self.app.form.apply_variables["Color"].set(True)
+        self.app.form.variables["Color"].set("Blue")
+        self.app.update()
+        self.root.update()
+
+        for piece_id, name, width, notes in (
+                (first, "Blue cotton", 40_000_000, "Keep first"),
+                (second, "Green cotton", 42_000_000, "Keep second")):
+            row = self.db.get_piece(piece_id)
+            self.assertEqual(row["Color"], "Blue")
+            self.assertEqual((row["FabricName"], row["UsableWidth"], row["Notes"]),
+                             (name, width, notes))
+
+        self.app.form.apply_variables["Color"].set(True)
+        self.app.form.variables["Color"].set("")
+        self.app.update()
+        self.assertIsNone(self.db.get_piece(first)["Color"])
+        self.assertIsNone(self.db.get_piece(second)["Color"])
+        self.errors.assert_not_called()
+
     def test_utilities_are_on_setup_page_and_navigation_confirms_discard(self):
         inventory_labels = [widget.cget("text") for widget in descendants(self.app.inventory_page)
                             if isinstance(widget, ttk.Button)]

@@ -81,7 +81,9 @@ SCREEN_HELP = {
     "Fabric": (
         "Maintain one record for each physical usable fabric rectangle.",
         "Enter usable dimensions in inches, excluding selvage and damaged edges. Highlight one row "
-        "to edit it. Add makes a separate rectangle; Update changes the highlighted rectangle. "
+        "to edit it. Add makes a separate rectangle; Update changes one highlighted rectangle, or "
+        "applies checked fields to multiple highlighted rectangles while preserving all other values. "
+        "A blank checked optional field clears its value; required fields remain validated. "
         "History shows saved changes. Retire a piece instead of deleting its history. "
         "Select Highlighted, Filter and Set Selection restrict the working list; Reset Selection "
         "shows all records. Sort saves an ordered list of sort fields. Quilt Backs and Quilt planning "
@@ -445,7 +447,9 @@ BUTTON_HELP = {
     "Add": ("Save a new physical fabric rectangle.", "Validate and save a separate fabric record "
             "with a new ID and history, even when the form was filled from an existing piece."),
     "Update": ("Save changes to the highlighted record.", "Validate and save the selected record. "
-               "For fabric, stale revisions are rejected and each change records history."),
+               "For fabric, check fields to apply them across multiple highlighted pieces; unchecked "
+               "values are preserved and blank checked optional values are cleared. Required values are "
+               "validated. Stale revisions are rejected, and each changed piece records history."),
     "Clear": ("Discard entry changes and clear the highlighted record.", "After confirmation for "
               "unsaved changes, clear the form without deleting saved records."),
     "History": ("Review the highlighted piece's saved changes.", "Select exactly one fabric "
