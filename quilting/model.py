@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from fractions import Fraction
 
@@ -73,6 +74,8 @@ FILTER_FIELDS = (
     Field("MaximumWidth", "length", width=6),
     Field("MinimumLength", "length", width=6),
     Field("MaximumLength", "length", width=6),
+    Field("AfterDateModified", "date", width=10),
+    Field("BeforeDateModified", "date", width=10),
     Field("Status", "choice", choices=("", *STATUSES)),
 )
 FABRIC_NAMES = tuple(field.name for field in FABRIC_FIELDS)
@@ -170,6 +173,19 @@ def display_fractional_measurement(value, *, round_up=False):
     return ("~" if sixteenths != rounded else "") + text
 
 
+def modified_date_boundary(value, field):
+    if not re.fullmatch(r"[0-9]{2}/[0-9]{2}/[0-9]{4}", value):
+        raise FieldError("Choice", field, reason="date_format")
+    try:
+        local = datetime.strptime(value, "%m/%d/%Y").replace(hour=0, minute=1)
+        utc = local.astimezone(timezone.utc)
+        if utc.astimezone().replace(tzinfo=None) != local:
+            raise ValueError("Local time does not exist")
+        return utc
+    except (ValueError, OverflowError, OSError) as error:
+        raise FieldError("Choice", field, reason="date_format") from error
+
+
 def validate_fields(fields, values, choices=None):
     expected = {field.name for field in fields}
     if set(values) != expected:
@@ -187,6 +203,10 @@ def validate_fields(fields, values, choices=None):
             raise FieldError("TooLong", field.name, limit=field.limit)
         if field.kind == "length":
             result[field.name] = measurement(value, field.name) if value else None
+        elif field.kind == "date":
+            if value:
+                modified_date_boundary(value, field.name)
+            result[field.name] = value
         elif field.kind == "choice":
             allowed = (choices or {}).get(field.name, field.choices)
             if value and value not in allowed:

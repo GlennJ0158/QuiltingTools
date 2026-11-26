@@ -205,7 +205,9 @@ SCREEN_HELP = {
     "Filter": (
         "Restrict the Fabric working list without changing inventory.",
         "Text filters match text anywhere in the field, ignoring case. Minimum dimensions are "
-        "inclusive inches and respect the rectangle's recorded orientation. Blank means no "
+        "inclusive inches and respect the rectangle's recorded orientation. Modification date bounds "
+        "use mm/dd/yyyy at 00:01 local time and include the boundary. Date Modified changes on "
+        "any saved modification, not only use. Blank means no "
         "restriction. Apply validates and applies the criteria; Cancel leaves the list unchanged.",
     ),
     "Sort": (
@@ -854,6 +856,10 @@ def default_help():
                 pair = (f"Filter by {field.label.lower()}.", SCREEN_HELP[screen][1])
             elif screen.endswith(" Set") and field.name == "SavedSet":
                 pair = ("Choose a saved working-list snapshot.", SCREEN_HELP[screen][1])
+            elif screen == "Filter" and field.name in ("AfterDateModified", "BeforeDateModified"):
+                pair = (f"Filter fabric by {field.label.lower()}.",
+                        "Enter mm/dd/yyyy; the boundary is 00:01 local time and is inclusive. "
+                        "Leave blank for no limit. Date Modified includes all saved changes, not just use.")
             elif screen == "Filter" and field.name not in (
                     "MinimumWidth", "MaximumWidth", "MinimumLength", "MaximumLength"):
                 pair = (f"Filter fabric by {field.label.lower()}.",

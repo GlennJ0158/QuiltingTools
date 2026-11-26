@@ -289,6 +289,38 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.app.list.tree.get_children(), (str(selected),))
         self.errors.assert_not_called()
 
+    def test_date_modified_filter_validates_applies_and_clears(self):
+        first = self.add_piece(FabricName="Old")
+        second = self.add_piece(FabricName="Recent")
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE FabricPiece SET DateModified='2020-06-15T12:00:00+00:00' WHERE ID=?", (first,))
+            self.db.connection.execute(
+                "UPDATE FabricPiece SET DateModified='2024-06-15T12:00:00+00:00' WHERE ID=?", (second,))
+        self.app.refresh()
+        self.app.open_filter()
+        window = self.dialog()
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        form.variables["BeforeDateModified"].set("02/30/2024")
+        self.click(window, "Apply")
+        self.errors.assert_called_once()
+        self.assertIn("mm/dd/yyyy", self.errors.call_args.args[1])
+        self.assertTrue(window.winfo_exists())
+        self.assertEqual(self.app.filters["BeforeDateModified"], "")
+        self.errors.reset_mock()
+        form.variables["BeforeDateModified"].set("01/01/2022")
+        self.click(window, "Apply")
+        self.assertEqual(self.app.list.tree.get_children(), (str(first),))
+        self.app.open_filter()
+        window = self.dialog()
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        self.assertEqual(form.variables["BeforeDateModified"].get(), "01/01/2022")
+        self.click(window, "Clear Fields")
+        self.assertEqual(form.variables["BeforeDateModified"].get(), "")
+        self.click(window, "Apply")
+        self.assertEqual(set(self.app.list.tree.get_children()), {str(first), str(second)})
+        self.errors.assert_not_called()
+
     def test_notes_are_wide_two_line_scrollable_and_persist(self):
         self.root.deiconify()
         self.root.update()

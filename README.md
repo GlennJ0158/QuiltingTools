@@ -369,7 +369,10 @@ Reset Selection, Sort**, followed by screen-specific actions such as Refresh.
 **Select Highlighted** restricts the current working list to its highlighted
 rows. It requires at least one highlight and does not change inventory.
 **Filter** adds case-insensitive text-contains criteria, inclusive minimum and maximum
-width/length and an optional status. Color uses the inventory color dropdown.
+width/length, inclusive After/Before Date Modified bounds and an optional status. Date
+bounds use `mm/dd/yyyy` at 00:01 in the computer's local time; equality is included.
+Date Modified reflects any saved inventory change, not only fabric use.
+Color uses the inventory color dropdown.
 Text such as `%` is matched literally. Size filtering respects the recorded orientation.
 
 **Set Selection** saves all records in the current working list, not just
