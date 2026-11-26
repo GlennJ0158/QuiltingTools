@@ -133,10 +133,17 @@ class BlockUITests(unittest.TestCase):
         self.db.set_quilt_use(quilt, 1, block_id, 1)
         self.app.refresh_quilts()
         self.app.load_quilt(quilt)
+        self.root.deiconify()
+        self.root.update()
+        page = self.app.quilt_page
+        self.assertTrue(page.winfo_ismapped())
         choice = next(label for label, saved_id in self.app.approved_blocks.items() if saved_id == block_id)
         self.app.quilt_form.variables["ApprovedBlock"].set(choice)
         self.click(self.app.quilt_page, "Eligible Fabrics")
         window = self.app.dialogs[-1]
+        self.root.update()
+        self.assertEqual((window.winfo_rootx(), window.winfo_rooty()),
+                         (page.winfo_rootx(), page.winfo_rooty()))
         form = next(child for child in window.winfo_children() if isinstance(child, Form))
         listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
         for side, expected in (("Inner top log", ids[:2]), ("Inner right log", [ids[3]]),
@@ -164,6 +171,10 @@ class BlockUITests(unittest.TestCase):
         self.app.show_screen("Quilt")
         self.app.refresh_quilts()
         self.app.load_quilt(quilt)
+        self.root.deiconify()
+        self.root.update()
+        page = self.app.quilt_page
+        self.assertTrue(page.winfo_ismapped())
         choice = next(label for label, saved_id in self.app.approved_blocks.items() if saved_id == block_id)
         self.app.quilt_form.variables["ApprovedBlock"].set(choice)
         self.click(self.app.quilt_page, "Set Block Quantity")
