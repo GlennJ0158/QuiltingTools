@@ -15,7 +15,7 @@ def matches_color_value(part, source):
     return minimum is None or (value is not None and minimum <= value <= maximum)
 
 
-def plan_quilt(uses, mappings, sources):
+def plan_quilt(uses, mappings, sources, assignments):
     """Pack cut-outline bounding rectangles; leave inventory untouched and report shortages."""
     demands = []
     for use in uses:
@@ -45,6 +45,7 @@ def plan_quilt(uses, mappings, sources):
                         "outline": [(x - left, y - top) for x, y in cut_outline.exterior.coords],
                     })
     demands.sort(key=lambda d: (-d["cut_width"] * d["cut_length"],
+                                0 if d["part_id"] in assignments else 1,
                                 d["MaximumColorValue"] - d["MinimumColorValue"]
                                 if d["MinimumColorValue"] is not None else 10,
                                 d["block_id"], d["part_id"]))
@@ -55,6 +56,8 @@ def plan_quilt(uses, mappings, sources):
         colors = {value.casefold() for value in mappings.get(item["color"], ())}
         candidates = []
         for index, stock in enumerate(stocks):
+            if item["part_id"] in assignments and stock["source"]["ID"] not in assignments[item["part_id"]]:
+                continue
             color = stock["source"]["Color"]
             if not color or color.casefold() not in colors:
                 continue

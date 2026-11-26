@@ -143,7 +143,7 @@ class HelpTextTests(unittest.TestCase):
         })
         self.db.save_set("Existing errors", [message_id], "ErrorMessage")
         with self.db.connection:
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
@@ -176,7 +176,7 @@ class HelpTextTests(unittest.TestCase):
                 "INSERT INTO WorkingListSet (ScreenName, ScopeName, SetName, DateCreated) "
                 "VALUES ('DropDown', 'InventoryColor', 'Legacy dynamic colors', '2000-01-01')",
             ).lastrowid
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
@@ -227,7 +227,7 @@ class HelpTextTests(unittest.TestCase):
         color_id = next(row["ID"] for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
         color_set = self.db.save_set("Colors", [color_id], "DropDown", "Color")
         with self.db.connection:
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute(
@@ -275,7 +275,7 @@ class HelpTextTests(unittest.TestCase):
     def make_version_two(self):
         self.db.save_piece(fabric(Color="Sage"))
         with self.db.connection:
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from quilting.database import Database
+from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
 from quilting.quilt_report import cutting_list_description
 from quilting.quilt_ui import QuiltScreenMixin
@@ -26,6 +26,78 @@ class QuiltPlanningTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         self.temp.cleanup()
+
+    def test_part_assignments_restrict_mapping_persist_and_leave_saved_plan_unchanged(self):
+        red_a = self.db.save_piece(fabric(FabricName="A", Color="Red", UsableWidth="12", UsableLength="22"))
+        red_b = self.db.save_piece(fabric(FabricName="B", Color="Red", UsableWidth="12", UsableLength="22"))
+        blue = self.db.save_piece(fabric(FabricName="C", Color="Blue", UsableWidth="12", UsableLength="22"))
+        self.db.add_quilt_mapping(self.quilt_id, 2, "Red", "Red")
+        part_id = self.db.block_parts(self.block_id)[0]["ID"]
+        before_id = self.db.create_quilt_plan(self.quilt_id, 3)
+        old = json.dumps(self.db.get_quilt_plan(before_id)["PlanData"], sort_keys=True)
+        self.db.save_quilt_part_fabrics(self.quilt_id, 3, self.block_id, {part_id: [red_b, blue]})
+        with self.assertRaises(FieldError):
+            self.db.save_quilt_part_fabrics(self.quilt_id, 3, self.block_id, {part_id: [red_a]})
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 4))
+        self.assertEqual([entry["source"]["ID"] for entry in plan["PlanData"]["sources"]], [red_b])
+        self.assertEqual(plan["PlanData"]["assignments"][str(part_id)], [red_b, blue])
+        self.assertIn(f"part ID {part_id}", QuiltScreenMixin.quilt_plan_description(plan))
+        self.assertEqual(json.dumps(self.db.get_quilt_plan(before_id)["PlanData"], sort_keys=True), old)
+        restricted = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 4, [red_a]))
+        self.assertFalse(restricted["PlanData"]["sources"])
+        self.assertEqual(restricted["PlanData"]["missing"][0]["count"], 4)
+        self.db.save_quilt_part_fabrics(self.quilt_id, 4, self.block_id, {})
+        self.assertEqual(self.db.quilt_part_fabrics(self.quilt_id), {})
+        unrestricted = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 5, [red_a]))
+        self.assertEqual(unrestricted["PlanData"]["sources"][0]["source"]["ID"], red_a)
+
+    def test_assignments_are_scoped_to_quilt_and_removed_with_block(self):
+        source = self.db.save_piece(fabric(Color="Red"))
+        part_id = self.db.block_parts(self.block_id)[0]["ID"]
+        other = self.db.add_quilt("Other")
+        self.db.set_quilt_use(other, 1, self.block_id, 1)
+        self.db.save_quilt_part_fabrics(self.quilt_id, 2, self.block_id, {part_id: [source]})
+        self.assertEqual(self.db.quilt_part_fabrics(other), {})
+        with self.assertRaises(FieldError):
+            self.db.save_quilt_part_fabrics(other, 2, self.block_id, {999999: [source]})
+        self.db.remove_quilt_use(self.quilt_id, 3, self.block_id)
+        self.assertEqual(self.db.quilt_part_fabrics(self.quilt_id), {})
+
+    def test_v15_upgrade_preserves_quilt_and_unrestricted_plans(self):
+        source = self.db.save_piece(fabric(Color="Red", UsableWidth="12", UsableLength="22"))
+        self.db.add_quilt_mapping(self.quilt_id, 2, "Red", "Red")
+        plan_id = self.db.create_quilt_plan(self.quilt_id, 3)
+        old_data = self.db.get_quilt_plan(plan_id)["PlanData"]
+        old_data.pop("assignments")
+        before = json.dumps(old_data, sort_keys=True)
+        with self.db.connection:
+            self.db.connection.execute("UPDATE QuiltPlan SET PlanData=? WHERE ID=?", (before, plan_id))
+            self.db.connection.execute(
+                "UPDATE HelpText SET HoverText='Custom hover', FullText='Custom help' "
+                "WHERE TableName='Eligible Fabrics' AND FieldName='BlockPartChoice'")
+            self.db.connection.execute(
+                "UPDATE HelpText SET HoverText=?, FullText=? WHERE TableName='Eligible Fabrics' "
+                "AND FieldName='ScreenHelp'",
+                ("Review fabrics matching a block part's color value range.",
+                 "Choose a part to list value-eligible available fabric in the Fabric working "
+                 "selection. Map inventory colors on the Quilt screen; planning also checks "
+                 "those mappings and the size of each piece."))
+            self.db.connection.execute("DROP TABLE QuiltPartFabric")
+            self.db.connection.execute("PRAGMA user_version=15")
+        path = self.db.path
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(path)
+        self.db = Database(path, upgrade=True)
+        self.assertEqual(self.db.connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertTrue(self.db.upgrade_backup.exists())
+        self.assertEqual(self.db.quilt_part_fabrics(self.quilt_id), {})
+        self.assertEqual(self.db.help_pair("Eligible Fabrics", "BlockPartChoice"), ("Custom hover", "Custom help"))
+        self.assertIn("Save Selection and Return", self.db.help_pair("Eligible Fabrics", "ScreenHelp")[1])
+        self.assertEqual(json.dumps(self.db.get_quilt_plan(plan_id)["PlanData"], sort_keys=True), before)
+        self.assertIn("Required parts:", QuiltScreenMixin.quilt_plan_description(self.db.get_quilt_plan(plan_id)))
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 3))
+        self.assertEqual(plan["PlanData"]["sources"][0]["source"]["ID"], source)
 
     def test_multiple_parts_share_small_source_and_inventory_is_unchanged(self):
         small = self.db.save_piece(fabric(FabricName="Small", Color="Red", UsableWidth="12", UsableLength="22"))
@@ -81,12 +153,14 @@ class QuiltPlanningTests(unittest.TestCase):
         self.assertFalse(plan["PlanData"]["missing"])
         self.assertIn("color value 1-4", cutting_list_description(plan, "Entire Quilt"))
         before = json.dumps(plan["PlanData"], sort_keys=True)
+        light_source = next(entry["source"]["ID"] for entry in plan["PlanData"]["sources"]
+                            if entry["source"]["ColorValue"] == 1)
+        self.db.save_quilt_part_fabrics(quilt, 3, block_id, {light_id: [light_source]})
         self.db.save_piece(fabric(FabricName="Value 1", Color="Red", ColorValue="5",
                                   UsableWidth="6", UsableLength="11"),
-                           next(entry["source"]["ID"] for entry in plan["PlanData"]["sources"]
-                                if entry["source"]["ColorValue"] == 1), 1)
+                           light_source, 1)
         self.assertEqual(json.dumps(self.db.get_quilt_plan(plan_id)["PlanData"], sort_keys=True), before)
-        new_plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, 3))["PlanData"]
+        new_plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, 4))["PlanData"]
         self.assertEqual(new_plan["missing"][0]["part_id"], light_id)
         self.assertEqual(new_plan["missing"][0]["count"], 1)
 

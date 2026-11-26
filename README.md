@@ -270,11 +270,19 @@ quilts concurrently; later draft copies never alter their selected versions.
 Block scale applies uniformly to the finished design; seam allowance remains the
 entered physical allowance. Changes of scale require a new version once approved.
 
-Use **Map Color** to associate each part's sketch color with one or more existing
-inventory Color values. Choose an approved block and **Eligible Fabrics** to
-review pieces matching a part's Color Value range before mapping colors. This
-view uses the current Fabric working selection; planning also checks color
-mappings and fit. No inferred color substitutions are made. **Plan Quilt**
+Choose a used **Part Color**, then an **Inventory Color**, and choose **Map Color**;
+repeat for every part color. Mappings apply to every part of that color in the
+quilt, and one part color can map to multiple inventory colors.
+Choose a block already added to the quilt and open **Eligible Fabrics**. For each
+part, highlight the desired pieces and choose **Assign Fabric to Part**; use
+**Remove Assignment** to remove choices and **Save Selection and Return** to
+save all changes. Assignments are per quilt and part, even when parts share a
+color, and restrict rather than replace the color mappings. If a part has no
+assignments, any otherwise matching piece may be used, preserving existing
+quilts' behavior. Eligible Fabrics uses the current Fabric working selection and
+also shows previously assigned pieces outside that selection. Planning checks
+the working selection, availability, color mapping, value range, and fit;
+assignments do not reserve fabric. **Plan Quilt**
 aggregates all selected blocks' parts and packs their cut-outline bounding
 rectangles into Available fabric in the Fabric Inventory working list. It prefers an already used source with space,
 then a fitting leftover region and smaller source area. Parts can rotate 90 degrees;

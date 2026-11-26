@@ -187,6 +187,7 @@ class Form(ttk.Frame):
     def uses_dropdown_list(self, name):
         field = next(field for field in self.fields if field.name == name)
         return (field.kind in ("choice", "dropdown") and self.database is not None
+                and (self.dropdown_scope, name) != ("Quilt", "PartColor")
                 and self.database.has_dropdown_list(self.dropdown_scope, name))
 
     def choices(self, field):
@@ -332,7 +333,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.root, self.db = root, database
         root.help_owner = self
         self.current = "Fabric"
-        self.dialogs, self.dialog_forms = [], {}
+        self.dialogs, self.dialog_forms, self.dialog_dirty = [], {}, {}
         self.missing_help_warned = set()
         self.help_id = None
         self.filters = {field.name: "" for field in FILTER_FIELDS}
@@ -479,7 +480,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         elif self.current == "ErrorMessage":
             forms.append((self.error_form, self.error_initial))
         forms.extend(self.dialog_forms.values())
-        return any(form.values() != initial for form, initial in forms)
+        return (any(form.values() != initial for form, initial in forms)
+                or any(dirty() for dirty in self.dialog_dirty.values()))
 
     def allow_navigation(self):
         return not self.unfinished() or messagebox.askyesno(
@@ -689,6 +691,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
     def dialog_closed(self, window):
         self.dialogs.remove(window)
         self.dialog_forms.pop(window, None)
+        self.dialog_dirty.pop(window, None)
         if self.dialogs:
             self.dialogs[-1].grab_set()
 

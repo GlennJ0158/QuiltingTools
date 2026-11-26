@@ -28,7 +28,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class MissingHelp(FieldError):
@@ -108,6 +108,14 @@ CREATE TABLE QuiltColorMap (
     PartColor TEXT NOT NULL,
     InventoryColor TEXT NOT NULL COLLATE NOCASE,
     PRIMARY KEY (QuiltID, PartColor, InventoryColor)
+);
+CREATE TABLE QuiltPartFabric (
+    QuiltID INTEGER NOT NULL,
+    QuiltBlockID INTEGER NOT NULL,
+    BlockPartID INTEGER NOT NULL REFERENCES BlockPart(ID) ON DELETE CASCADE,
+    FabricPieceID INTEGER NOT NULL REFERENCES FabricPiece(ID),
+    PRIMARY KEY (QuiltID, BlockPartID, FabricPieceID),
+    FOREIGN KEY (QuiltID, QuiltBlockID) REFERENCES QuiltBlockUse(QuiltID, QuiltBlockID) ON DELETE CASCADE
 );
 CREATE TABLE QuiltPlan (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,6 +326,7 @@ TABLE_COLUMNS = {
     "Quilt": ("ID", "QuiltName", "Revision", "DateCreated", "DateModified"),
     "QuiltBlockUse": ("QuiltID", "QuiltBlockID", "Quantity"),
     "QuiltColorMap": ("QuiltID", "PartColor", "InventoryColor"),
+    "QuiltPartFabric": ("QuiltID", "QuiltBlockID", "BlockPartID", "FabricPieceID"),
     "QuiltPlan": ("ID", "QuiltID", "QuiltRevision", "PlanData", "DateCreated"),
 }
 SAVED_SORTS = {
@@ -403,6 +412,8 @@ class Database:
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version < 16 and table == "QuiltPartFabric":
+                continue
             if version < 9 and table in ("QuiltBlock", "BlockPart", "BlockPartPlacement", "BlockSet",
                                          "BlockSetMember", "Quilt", "QuiltBlockUse", "QuiltColorMap", "QuiltPlan"):
                 continue
@@ -495,19 +506,32 @@ class Database:
                     "ALTER TABLE QuiltBack ADD COLUMN SideMargin INTEGER NOT NULL DEFAULT 0 "
                     "CHECK(SideMargin >= 0)")
                 self.connection.execute("UPDATE QuiltBack SET SideMargin = Margin")
-            self.connection.execute(
-                "ALTER TABLE FabricPiece ADD COLUMN ColorValue INTEGER CHECK(ColorValue IS NULL OR "
-                "(typeof(ColorValue) = 'integer' AND ColorValue BETWEEN 1 AND 10))")
+            if version < 15:
+                self.connection.execute(
+                    "ALTER TABLE FabricPiece ADD COLUMN ColorValue INTEGER CHECK(ColorValue IS NULL OR "
+                    "(typeof(ColorValue) = 'integer' AND ColorValue BETWEEN 1 AND 10))")
+                if version >= 9:
+                    self.connection.execute(
+                        "ALTER TABLE BlockPart ADD COLUMN MinimumColorValue INTEGER "
+                        "CHECK(MinimumColorValue IS NULL OR "
+                        "(typeof(MinimumColorValue) = 'integer' AND MinimumColorValue BETWEEN 1 AND 10))")
+                    self.connection.execute(
+                        "ALTER TABLE BlockPart ADD COLUMN MaximumColorValue INTEGER "
+                        "CHECK((MaximumColorValue IS NULL AND MinimumColorValue IS NULL) OR "
+                        "(typeof(MaximumColorValue) = 'integer' AND MaximumColorValue BETWEEN 1 AND 10 "
+                        "AND MinimumColorValue IS NOT NULL AND MinimumColorValue <= MaximumColorValue))")
             if version >= 9:
-                self.connection.execute(
-                    "ALTER TABLE BlockPart ADD COLUMN MinimumColorValue INTEGER "
-                    "CHECK(MinimumColorValue IS NULL OR "
-                    "(typeof(MinimumColorValue) = 'integer' AND MinimumColorValue BETWEEN 1 AND 10))")
-                self.connection.execute(
-                    "ALTER TABLE BlockPart ADD COLUMN MaximumColorValue INTEGER "
-                    "CHECK((MaximumColorValue IS NULL AND MinimumColorValue IS NULL) OR "
-                    "(typeof(MaximumColorValue) = 'integer' AND MaximumColorValue BETWEEN 1 AND 10 "
-                    "AND MinimumColorValue IS NOT NULL AND MinimumColorValue <= MaximumColorValue))")
+                self.connection.execute("""
+                    CREATE TABLE QuiltPartFabric (
+                        QuiltID INTEGER NOT NULL,
+                        QuiltBlockID INTEGER NOT NULL,
+                        BlockPartID INTEGER NOT NULL REFERENCES BlockPart(ID) ON DELETE CASCADE,
+                        FabricPieceID INTEGER NOT NULL REFERENCES FabricPiece(ID),
+                        PRIMARY KEY (QuiltID, BlockPartID, FabricPieceID),
+                        FOREIGN KEY (QuiltID, QuiltBlockID)
+                            REFERENCES QuiltBlockUse(QuiltID, QuiltBlockID) ON DELETE CASCADE
+                    )
+                """)
             self.connection.execute(
                 "DELETE FROM WorkingListMember WHERE SelectionSetID IN "
                 "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown') "
@@ -516,6 +540,7 @@ class Database:
             self.connection.execute("UPDATE Dropdown SET Def = 0 WHERE Use = 0")
             self._seed_system_dropdowns()
             self._seed_help()
+            self._upgrade_quilt_help()
             if version < 13:
                 self._upgrade_margin_help()
             if version < 4:
@@ -759,6 +784,41 @@ class Database:
                 "AND FieldName=? AND HoverText=? AND FullText=?",
                 (hover, full, field, *old_pair),
             )
+
+    def _upgrade_quilt_help(self):
+        previous = {
+            ("Eligible Fabrics", "ScreenHelp"): (
+                "Review fabrics matching a block part's color value range.",
+                "Choose a part to list value-eligible available fabric in the Fabric working "
+                "selection. Map inventory colors on the Quilt screen; planning also checks "
+                "those mappings and the size of each piece."),
+            ("Eligible Fabrics", "BlockPartChoice"): (
+                "Choose a block part.", "Select a part to see available fabric pieces "
+                "that match its optional color value range."),
+            ("Quilt", "Button:Eligible Fabrics"): (
+                "Review fabric values for a block part.", "Choose an approved block, then "
+                "review available pieces matching each part's color value range."),
+            ("Quilt", "PartColor"): (
+                "Enter part color.", "Enter the part color for this block or part. "
+                "This is a system-generated protected list. The values are used in internal "
+                "program logic and changing values can interfere with program operation. "
+                "The user may change the default value using the DropDown system."),
+            ("Quilt", "ScreenHelp"): (
+                "Compose a quilt and plan its cuts.",
+                "Create or select a quilt; choose approved block versions and their quantities. "
+                "Map each part color to one or more inventory color values, then choose Plan Quilt. "
+                "Plans pack conservative cut bounding rectangles, can report shortages and do not "
+                "reserve or change inventory. Existing plans are snapshots; regenerate after changes. "
+                "Available sources follow the Fabric working list. Eligible Fabrics lists pieces "
+                "matching a selected part's optional color value range. Choose Entire Quilt or By Block, "
+                "then Print Quilt Plan to print the saved plan."),
+        }
+        defaults = default_help()
+        for (screen, field), old_pair in previous.items():
+            self.connection.execute(
+                "UPDATE HelpText SET HoverText=?, FullText=? WHERE TableName=? AND FieldName=? "
+                "AND HoverText=? AND FullText=?",
+                (*defaults[screen, field], screen, field, *old_pair))
 
     def _seed_errors(self):
         for row in self.connection.execute("SELECT * FROM ErrorText ORDER BY ErrorTextID").fetchall():
@@ -1561,6 +1621,40 @@ class Database:
                 raise FieldError("MissingRecord", "QuiltColorMap")
             self._touch_quilt(quilt_id)
 
+    def quilt_part_fabrics(self, quilt_id, block_id=None):
+        self.get_quilt(quilt_id)
+        sql = ("SELECT BlockPartID, FabricPieceID FROM QuiltPartFabric WHERE QuiltID=?")
+        args = [quilt_id]
+        if block_id is not None:
+            sql += " AND QuiltBlockID=?"
+            args.append(block_id)
+        assignments = {}
+        for row in self.connection.execute(sql + " ORDER BY BlockPartID, FabricPieceID", args):
+            assignments.setdefault(row["BlockPartID"], []).append(row["FabricPieceID"])
+        return assignments
+
+    def save_quilt_part_fabrics(self, quilt_id, revision, block_id, assignments):
+        with self._write_transaction():
+            self._quilt_revision(quilt_id, revision)
+            if not self.connection.execute(
+                    "SELECT 1 FROM QuiltBlockUse WHERE QuiltID=? AND QuiltBlockID=?",
+                    (quilt_id, block_id)).fetchone():
+                raise FieldError("Choice", "ApprovedBlock")
+            valid_parts = {part["ID"] for part in self.block_parts(block_id)}
+            if not set(assignments) <= valid_parts:
+                raise FieldError("Choice", "BlockPartChoice")
+            for ids in assignments.values():
+                for piece_id in ids:
+                    self.get_piece(piece_id)
+            self.connection.execute(
+                "DELETE FROM QuiltPartFabric WHERE QuiltID=? AND QuiltBlockID=?", (quilt_id, block_id))
+            self.connection.executemany(
+                "INSERT INTO QuiltPartFabric (QuiltID, QuiltBlockID, BlockPartID, FabricPieceID) "
+                "VALUES (?, ?, ?, ?)",
+                ((quilt_id, block_id, part_id, piece_id)
+                 for part_id, ids in assignments.items() for piece_id in sorted(set(ids))))
+            self._touch_quilt(quilt_id)
+
     def quilt_plans(self, quilt_id):
         self.get_quilt(quilt_id)
         return [dict(row) for row in self.connection.execute(
@@ -1595,8 +1689,10 @@ class Database:
             mappings = {}
             for row in self.quilt_mappings(quilt_id):
                 mappings.setdefault(row["PartColor"], []).append(row["InventoryColor"])
-            draft = plan_quilt(uses, mappings, self.pieces(selected_ids=selected_ids))
-            draft.update(quilt=self.get_quilt(quilt_id), uses=uses, mappings=mappings)
+            assignments = self.quilt_part_fabrics(quilt_id)
+            draft = plan_quilt(uses, mappings, self.pieces(selected_ids=selected_ids), assignments)
+            draft.update(quilt=self.get_quilt(quilt_id), uses=uses, mappings=mappings,
+                         assignments=assignments)
             return self.connection.execute(
                 "INSERT INTO QuiltPlan (QuiltID, QuiltRevision, PlanData, DateCreated) VALUES (?, ?, ?, ?)",
                 (quilt_id, revision, json.dumps(draft), now())).lastrowid
