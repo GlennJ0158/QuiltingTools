@@ -9,7 +9,8 @@ BLOCK_TEMPLATES = {
     "Four Patch": "A two-by-two checkerboard of equal rectangular patches.",
     "Nine Patch": "A three-by-three grid with contrasting corner/center and side patches.",
     "Flying Geese": "One large triangle with two background triangles in a rectangular unit.",
-    "Log Cabin": "A center patch surrounded by two alternating rounds of rectangular logs.",
+    "Log Cabin (Square)": "A center patch surrounded by two alternating rounds of rectangular logs.",
+    "Log Cabin (Spiral)": "Spiral logs with light top/left and dark bottom/right sides.",
     "Half-Square Triangle": "Four two-triangle units arranged in a two-by-two grid.",
 }
 
@@ -21,15 +22,15 @@ def _integer_grid(length, divisions):
 def _specs_for_template(name, width, length):
     parts = OrderedDict()
 
-    def add(part_name, shape, color, dimensions, x, y, rotation=0, mirrored=False):
-        key = (part_name, shape, color, tuple(dimensions.items()))
+    def add(part_name, shape, color, dimensions, x, y, rotation=0, mirrored=False, color_range=None):
+        key = (part_name, shape, color, tuple(dimensions.items()), color_range)
         if key not in parts:
-            parts[key] = {"dimensions": dimensions, "placements": []}
+            parts[key] = {"dimensions": dimensions, "placements": [], "color_range": color_range}
         parts[key]["placements"].append((x, y, rotation, mirrored))
 
-    def rectangle(part_name, color, x0, y0, x1, y1):
+    def rectangle(part_name, color, x0, y0, x1, y1, color_range=None):
         add(part_name, "Rectangle", color,
-            {"PartWidth": x1 - x0, "PartLength": y1 - y0}, x0, y0)
+            {"PartWidth": x1 - x0, "PartLength": y1 - y0}, x0, y0, color_range=color_range)
 
     def right_triangle(part_name, color, leg_x, leg_y, x, y, rotation=0, mirrored=False):
         add(part_name, "Right Triangle", color,
@@ -64,7 +65,7 @@ def _specs_for_template(name, width, length):
         right_triangle("Background left", "Blue", half_width, length, 0, 0)
         right_triangle("Background right", "Blue", other_half, length, half_width, 0, mirrored=True)
 
-    elif name == "Log Cabin":
+    elif name == "Log Cabin (Square)":
         xs, ys = _integer_grid(width, 5), _integer_grid(length, 5)
         rectangle("Center", "Yellow", xs[2], ys[2], xs[3], ys[3])
         logs = (
@@ -79,6 +80,29 @@ def _specs_for_template(name, width, length):
         )
         for part_name, color, x0, y0, x1, y1 in logs:
             rectangle(part_name, color, x0, y0, x1, y1)
+
+    elif name == "Log Cabin (Spiral)":
+        center = min(width, length) // 5
+
+        def boundaries(size):
+            start = (size - center) // 2
+            end = start + center
+            return (0, start // 2, start, end, end + (size - end) // 2, size)
+
+        xs, ys = boundaries(width), boundaries(length)
+        add("Center", "Square", "Yellow", {"PartWidth": center, "PartLength": center}, xs[2], ys[2])
+        logs = (
+            ("Inner right log", "Black", 7, 10, 3, 2, 4, 3),
+            ("Inner bottom log", "Black", 7, 10, 2, 3, 4, 4),
+            ("Inner left log", "White", 1, 4, 1, 2, 2, 4),
+            ("Inner top log", "White", 1, 4, 1, 1, 4, 2),
+            ("Outer right log", "Black", 7, 10, 4, 1, 5, 4),
+            ("Outer bottom log", "Black", 7, 10, 1, 4, 5, 5),
+            ("Outer left log", "White", 1, 4, 0, 1, 1, 5),
+            ("Outer top log", "White", 1, 4, 0, 0, 5, 1),
+        )
+        for part_name, color, low, high, x0, y0, x1, y1 in logs:
+            rectangle(part_name, color, xs[x0], ys[y0], xs[x1], ys[y1], (low, high))
 
     elif name == "Half-Square Triangle":
         xs, ys = _integer_grid(width, 2), _integer_grid(length, 2)
@@ -95,7 +119,7 @@ def _specs_for_template(name, width, length):
         raise ValueError(f"Unknown block template: {name}")
 
     result = []
-    for (part_name, shape, color, _), part in parts.items():
+    for (part_name, shape, color, _, _), part in parts.items():
         values = {
             "PartName": part_name,
             "Shape": shape,
@@ -107,6 +131,8 @@ def _specs_for_template(name, width, length):
             "SideB": "",
             "SideC": "",
             "Diameter": "",
+            "MinimumColorValue": str(part["color_range"][0]) if part["color_range"] else "",
+            "MaximumColorValue": str(part["color_range"][1]) if part["color_range"] else "",
         }
         for field, value in part["dimensions"].items():
             values[field] = display_measurement(value)

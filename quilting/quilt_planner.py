@@ -9,6 +9,12 @@ from .blocks import cutting_shape
 from .model import UNITS_PER_INCH, FieldError
 
 
+def matches_color_value(part, source):
+    minimum, maximum = part["MinimumColorValue"], part["MaximumColorValue"]
+    value = source["ColorValue"]
+    return minimum is None or (value is not None and minimum <= value <= maximum)
+
+
 def plan_quilt(uses, mappings, sources):
     """Pack cut-outline bounding rectangles; leave inventory untouched and report shortages."""
     demands = []
@@ -25,7 +31,9 @@ def plan_quilt(uses, mappings, sources):
             length = math.ceil((maxy - miny) * UNITS_PER_INCH)
             demand = {"block_id": use["block"]["ID"], "block_name": use["block"]["BlockName"],
                       "part_id": part["ID"], "part_name": part["PartName"], "shape": part["Shape"],
-                      "color": part["PartColor"], "cut_width": width, "cut_length": length}
+                      "color": part["PartColor"], "cut_width": width, "cut_length": length,
+                      "MinimumColorValue": part["MinimumColorValue"],
+                      "MaximumColorValue": part["MaximumColorValue"]}
             placements = [p for p in use["placements"] if p["BlockPartID"] == part["ID"]]
             for block_number in range(1, use["quantity"] + 1):
                 for placement in placements:
@@ -36,7 +44,10 @@ def plan_quilt(uses, mappings, sources):
                         "mirrored": bool(placement["Mirrored"]), "block_rotation": placement["Rotation"],
                         "outline": [(x - left, y - top) for x, y in cut_outline.exterior.coords],
                     })
-    demands.sort(key=lambda d: (-d["cut_width"] * d["cut_length"], d["block_id"], d["part_id"]))
+    demands.sort(key=lambda d: (-d["cut_width"] * d["cut_length"],
+                                d["MaximumColorValue"] - d["MinimumColorValue"]
+                                if d["MinimumColorValue"] is not None else 10,
+                                d["block_id"], d["part_id"]))
     stocks = [{"source": dict(row), "free": [(0, 0, row["UsableWidth"], row["UsableLength"])],
                "cuts": []} for row in sources if row["Status"] == "Available"]
     missing = {}
@@ -46,6 +57,8 @@ def plan_quilt(uses, mappings, sources):
         for index, stock in enumerate(stocks):
             color = stock["source"]["Color"]
             if not color or color.casefold() not in colors:
+                continue
+            if not matches_color_value(item, stock["source"]):
                 continue
             for free_index, (x, y, width, length) in enumerate(stock["free"]):
                 for rotated in (False, True):

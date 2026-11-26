@@ -30,7 +30,8 @@ def cutting_list_description(plan, mode):
                   else ("Diameter",))
         dimensions = tuple(Decimal(part[field]) * scale for field in fields)
         key = (part["Shape"], part["PartColor"], dimensions, block["SeamAllowance"],
-               item["cut_width"], item["cut_length"], item["mirrored"])
+               item["cut_width"], item["cut_length"], item["mirrored"],
+               part.get("MinimumColorValue"), part.get("MaximumColorValue"))
         if mode == "By Block":
             key = (block["ID"], part["ID"], *key)
         if key not in groups:
@@ -67,16 +68,20 @@ def cutting_list_description(plan, mode):
         finished = ", ".join(f"{labels[field]} {_measurement(value)}"
                              for field, value in zip(group["fields"], group["dimensions"]))
         name = f"{part['PartName']} (part ID {part['ID']}): " if mode == "By Block" else ""
+        value_range = (f"; color value {part['MinimumColorValue']}-{part['MaximumColorValue']}"
+                       if part.get("MinimumColorValue") is not None else "")
         lines.append(f"  {name}{group['required']} {part['PartColor']} {part['Shape']}; "
                      f"finished {finished} in; seam allowance "
                      f"{_measurement(group['block']['SeamAllowance'])} in; "
                      f"cut bounding size {_measurement(item['cut_width'])} x "
                      f"{_measurement(item['cut_length'])} in; "
-                     f"{'mirrored' if item['mirrored'] else 'not mirrored'}")
+                     f"{'mirrored' if item['mirrored'] else 'not mirrored'}{value_range}")
         for source, count in group["sources"].values():
+            value = source.get("ColorValue")
             lines.append(f"    {count} from Fabric {source['ID']}: {source['FabricName']} / "
                          f"{source['Color']}, {_measurement(source['UsableWidth'])} x "
-                         f"{_measurement(source['UsableLength'])} in (revision {source['Revision']})")
+                         f"{_measurement(source['UsableLength'])} in (revision {source['Revision']}); "
+                         f"color value {value if value is not None else 'unknown'}")
         if group["missing"]:
             lines.append(f"    Missing: {group['missing']}")
 

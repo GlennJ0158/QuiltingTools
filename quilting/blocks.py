@@ -8,7 +8,7 @@ from shapely import affinity
 from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
-from .model import Field, FieldError, UNITS_PER_INCH, measurement, validate_fields
+from .model import COLOR_VALUES, Field, FieldError, UNITS_PER_INCH, measurement, validate_fields
 
 SHAPES = ("Rectangle", "Square", "Right Triangle", "Isosceles Triangle", "Circle", "Semicircle")
 COLORS = ("Red", "Yellow", "Blue", "Green", "Orange", "Purple", "Black", "White", "Gray")
@@ -26,6 +26,8 @@ PART_FIELDS = (
     Field("PartWidth", width=8), Field("PartLength", width=8),
     Field("SideA", width=8), Field("SideB", width=8), Field("SideC", width=8),
     Field("Diameter", width=8),
+    Field("MinimumColorValue", "choice", choices=("", *COLOR_VALUES), width=4),
+    Field("MaximumColorValue", "choice", choices=("", *COLOR_VALUES), width=4),
 )
 BLOCK_COLUMNS = ("ID", "BlockName", "FinishedWidth", "FinishedLength", "Scale", "Status", "Revision")
 BLOCK_FILTER_FIELDS = (Field("BlockName"), Field("Status", "choice", choices=("", "Draft", "Approved")))
@@ -51,6 +53,13 @@ def parse_block(values):
 
 def parse_part(values, choices=None):
     clean = validate_fields(PART_FIELDS, values, choices)
+    for name in ("MinimumColorValue", "MaximumColorValue"):
+        clean[name] = int(clean[name]) if clean[name] else None
+    if (clean["MinimumColorValue"] is None) != (clean["MaximumColorValue"] is None):
+        raise FieldError("Required", "MinimumColorValue" if clean["MinimumColorValue"] is None
+                         else "MaximumColorValue")
+    if clean["MinimumColorValue"] is not None and clean["MinimumColorValue"] > clean["MaximumColorValue"]:
+        raise FieldError("Choice", "MinimumColorValue", reason="range_order")
     try:
         count = int(clean["NumberInBlock"])
         if str(count) != clean["NumberInBlock"] or not 1 <= count <= 1000:

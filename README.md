@@ -19,11 +19,12 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 13 prompt for a backed-up
+automatically. Databases with schema versions 1 through 14 prompt for a backed-up
 upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
 working-list selections, Quilt Backs planning, generalized dropdown keys and
 QuiltBlock/Quilt design, protected list metadata, nullable optional fabric fields,
-separate quilt-back margins and the Fabric Pattern field rename;
+separate quilt-back margins, the Fabric Pattern field rename, and optional
+fabric color values and block part ranges;
 declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
@@ -203,6 +204,10 @@ first plan using a source can be confirmed without regeneration.
 Open **QuiltBlock** to add a named draft with finished width and length, scale
 percentage (100 by default), and seam allowance (1/4 inch per edge by default).
 Scale applies to the finished design and placement coordinates, not seam allowance.
+Fabric inventory has an optional **Color Value** from 1 (very light) to 10
+(very dark). Leave it blank if unknown. In **Parts**, enter both minimum and
+maximum Color Value to restrict a part, or leave both blank for no restriction.
+Unknown fabric values do not qualify for a restricted part.
 Scale is displayed as a percentage without scientific notation. Existing scale
 limits are unchanged. Approved blocks cannot be edited; select one and choose
 **New Version** to make an editable draft. If a draft changed since it was loaded,
@@ -242,8 +247,13 @@ Block design never reserves or changes fabric inventory.
 
 **Create from Template** adds an editable draft using the finished width and
 length currently entered on the QuiltBlock form, along with its scale and seam
-allowance. Starter layouts include Four Patch, Nine Patch, Flying Geese, Log
-Cabin, and Half-Square Triangle. The generated parts and placements can be
+allowance. Starter layouts include Four Patch, Nine Patch, Flying Geese,
+Log Cabin (Square), Log Cabin (Spiral), and Half-Square Triangle. Square retains
+the original concentric layout. Spiral uses light top/left logs (values 1–4)
+and dark bottom/right logs (values 7–10), with a stepped rather than straight
+diagonal boundary. Its center is unrestricted and defaults to yellow; edit
+its color and optional value range in Parts. These are editable defaults and
+existing saved blocks are unchanged. The generated parts and placements can be
 edited before approval; colors are visual defaults. Wedding Ring is not included
 because its curved arc pieces are not represented by the current geometry model.
 
@@ -256,7 +266,10 @@ Block scale applies uniformly to the finished design; seam allowance remains the
 entered physical allowance. Changes of scale require a new version once approved.
 
 Use **Map Color** to associate each part's sketch color with one or more existing
-inventory Color values. No inferred color substitutions are made. **Plan Quilt**
+inventory Color values. Choose an approved block and **Eligible Fabrics** to
+review pieces matching a part's Color Value range before mapping colors. This
+view uses the current Fabric working selection; planning also checks color
+mappings and fit. No inferred color substitutions are made. **Plan Quilt**
 aggregates all selected blocks' parts and packs their cut-outline bounding
 rectangles into Available fabric in the Fabric Inventory working list. It prefers an already used source with space,
 then a fitting leftover region and smaller source area. Parts can rotate 90 degrees;

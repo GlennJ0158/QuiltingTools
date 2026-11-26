@@ -314,7 +314,7 @@ class RecordList(ttk.Frame):
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")
                 else display_field_key(row[name]) if name == "FieldName"
                 else str(row[name])[:25] if name == self.name_limit
-                else row[name] for name in self.columns
+                else "" if row[name] is None else row[name] for name in self.columns
             ]
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
         order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort) if sort else ""

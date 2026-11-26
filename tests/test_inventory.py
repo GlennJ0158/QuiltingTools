@@ -19,6 +19,14 @@ def fabric(**overrides):
     return values
 
 
+def downgrade_color_value_schema(connection):
+    connection.execute("ALTER TABLE FabricPiece DROP COLUMN ColorValue")
+    if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='BlockPart'").fetchone():
+        connection.execute("ALTER TABLE BlockPart DROP COLUMN MaximumColorValue")
+        connection.execute("ALTER TABLE BlockPart DROP COLUMN MinimumColorValue")
+
+
 def downgrade_dropdown_schema(connection, generalized=False):
     connection.execute("DROP INDEX IF EXISTS DropdownDefaultIndex")
     connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")
@@ -50,6 +58,8 @@ def assert_legacy_rows_preserved(test_case, database, table, rows):
             test_case.assertEqual(by_id[row[0]][:len(row)], row)
         test_case.assertTrue(any(row["UserModified"] == 0
                                  for row in database.dropdown_rows("Status", table_name="FabricPiece")))
+    elif table == "FabricPiece":
+        test_case.assertEqual(actual, [(*row, None) for row in rows])
     else:
         test_case.assertEqual(actual, rows, table)
 
@@ -114,6 +124,39 @@ class DatabaseTests(unittest.TestCase):
         self.db.close()
         self.temp.cleanup()
 
+    def test_color_value_is_optional_validated_and_persisted(self):
+        unknown = self.db.save_piece(fabric())
+        self.assertIsNone(self.db.get_piece(unknown)["ColorValue"])
+        self.db.save_piece(fabric(ColorValue="7"), unknown, 1)
+        self.assertEqual(self.db.get_piece(unknown)["ColorValue"], 7)
+        self.db.save_piece(fabric(ColorValue=""), unknown, 2)
+        self.assertIsNone(self.db.get_piece(unknown)["ColorValue"])
+        for value in ("0", "11", "1.5", "dark"):
+            with self.subTest(value=value), self.assertRaises(FieldError):
+                self.db.save_piece(fabric(ColorValue=value))
+        self.assertEqual(len(self.db.history(unknown)), 3)
+
+    def test_v14_upgrade_preserves_existing_rows_and_adds_unknown_values(self):
+        from tests.test_blocks import block, part
+        piece_id = self.db.save_piece(fabric())
+        block_id = self.db.add_block(block())
+        part_id = self.db.save_block_part(block_id, 1, part())
+        with self.db.connection:
+            downgrade_color_value_schema(self.db.connection)
+            self.db.connection.execute("PRAGMA user_version=14")
+        self.db.close()
+        with self.assertRaises(UpgradeRequired):
+            Database(self.path)
+        self.db = Database(self.path, upgrade=True)
+        self.assertIsNone(self.db.get_piece(piece_id)["ColorValue"])
+        part_row = self.db.block_parts(block_id)[0]
+        self.assertEqual(part_row["ID"], part_id)
+        self.assertIsNone(part_row["MinimumColorValue"])
+        self.assertIsNone(part_row["MaximumColorValue"])
+        self.assertTrue(self.db.upgrade_backup.exists())
+        with sqlite3.connect(self.db.upgrade_backup) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 14)
+
     def test_all_fields_survive_update_and_reopen(self):
         values = fabric(
             FabricName="Red's cotton", Color="Red", FabricPattern="Tiny flowers",
@@ -126,7 +169,7 @@ class DatabaseTests(unittest.TestCase):
         self.db = Database(self.path)
         row = self.db.get_piece(piece_id)
         for key, value in validate_fields(FABRIC_FIELDS, values).items():
-            self.assertEqual(row[key], value, key)
+            self.assertEqual(row[key], None if key == "ColorValue" and value == "" else value, key)
         values["UsableLength"] = "12 1/2"
         self.db.save_piece(values, piece_id, row["Revision"])
         changed = self.db.get_piece(piece_id)
@@ -326,6 +369,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute("UPDATE FabricHistory SET AfterValues=? WHERE ID=?",
                                        (json.dumps(snapshot), row["ID"]))
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=13")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -354,6 +398,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute("UPDATE FabricHistory SET AfterValues='not json' WHERE FabricPieceID=?",
                                        (piece_id,))
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=13")
         self.db.close()
         with self.assertRaises(FieldError):
@@ -530,6 +575,7 @@ class DatabaseTests(unittest.TestCase):
                                        "ON Dropdown(TableName, FieldName) WHERE Def = 1 AND Use = 1")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 9")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -559,6 +605,7 @@ class DatabaseTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE Dropdown")
             self.db.connection.execute("DROP TABLE HelpText")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 1")
         before = {
             table: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")]
@@ -579,7 +626,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(list(self.path.parent.glob("PreUpgrade_*")), [])
         self.db = Database(self.path, upgrade=True)
         for table, rows in before.items():
-            self.assertEqual(rows, [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {table}")])
+            assert_legacy_rows_preserved(self, self.db, table, rows)
         self.assertEqual(error_ids, [tuple(row) for row in self.db.connection.execute(
             "SELECT ErrorTextID, MessageKey FROM ErrorText ORDER BY ErrorTextID",
         )])

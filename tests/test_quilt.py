@@ -7,7 +7,7 @@ from quilting.database import Database
 from quilting.model import FieldError
 from quilting.quilt_report import cutting_list_description
 from tests.test_blocks import block, part
-from tests.test_inventory import fabric
+from tests.test_inventory import downgrade_color_value_schema, fabric
 
 
 class QuiltPlanningTests(unittest.TestCase):
@@ -57,6 +57,38 @@ class QuiltPlanningTests(unittest.TestCase):
         self.assertEqual(len(plan["sources"][0]["cuts"]), 1)
         self.assertEqual(plan["missing"][0]["count"], 3)
 
+    def test_part_ranges_limit_matching_pieces_and_saved_plan_is_a_snapshot(self):
+        block_id = self.db.add_block(block(BlockName="Contrasting"))
+        light_id = self.db.save_block_part(block_id, 1, part(
+            PartName="Light", NumberInBlock="1", MinimumColorValue="1", MaximumColorValue="4"))
+        dark_id = self.db.save_block_part(block_id, 2, part(
+            PartName="Dark", NumberInBlock="1", MinimumColorValue="7", MaximumColorValue="10"))
+        dark_placement = next(p for p in self.db.block_placements(block_id) if p["BlockPartID"] == dark_id)
+        self.db.save_block_placement(block_id, 3, dark_placement["ID"], 5_000_000, 0, 0, False)
+        self.db.approve_block(block_id, 4)
+        quilt = self.db.add_quilt("Contrast")
+        self.db.set_quilt_use(quilt, 1, block_id, 1)
+        for value in ("", "5", "1", "10"):
+            self.db.save_piece(fabric(FabricName=f"Value {value}", Color="Red", ColorValue=value,
+                                      UsableWidth="6", UsableLength="11"))
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        plan_id = self.db.create_quilt_plan(quilt, 3)
+        plan = self.db.get_quilt_plan(plan_id)
+        by_part = {cut["part_id"]: entry["source"]["ColorValue"]
+                   for entry in plan["PlanData"]["sources"] for cut in entry["cuts"]}
+        self.assertEqual(by_part, {light_id: 1, dark_id: 10})
+        self.assertFalse(plan["PlanData"]["missing"])
+        self.assertIn("color value 1-4", cutting_list_description(plan, "Entire Quilt"))
+        before = json.dumps(plan["PlanData"], sort_keys=True)
+        self.db.save_piece(fabric(FabricName="Value 1", Color="Red", ColorValue="5",
+                                  UsableWidth="6", UsableLength="11"),
+                           next(entry["source"]["ID"] for entry in plan["PlanData"]["sources"]
+                                if entry["source"]["ColorValue"] == 1), 1)
+        self.assertEqual(json.dumps(self.db.get_quilt_plan(plan_id)["PlanData"], sort_keys=True), before)
+        new_plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, 3))["PlanData"]
+        self.assertEqual(new_plan["missing"][0]["part_id"], light_id)
+        self.assertEqual(new_plan["missing"][0]["count"], 1)
+
     def test_v13_upgrade_renames_saved_plan_source_pattern(self):
         self.db.save_piece(fabric(Color="Red", FabricPattern="Floral", UsableWidth="12", UsableLength="22",
                                   Notes="PatternName is just text"))
@@ -68,6 +100,7 @@ class QuiltPlanningTests(unittest.TestCase):
         with self.db.connection:
             self.db.connection.execute("UPDATE QuiltPlan SET PlanData=? WHERE ID=?", (json.dumps(plan), plan_id))
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=13")
         path = self.db.path
         self.db.close()
@@ -76,6 +109,33 @@ class QuiltPlanningTests(unittest.TestCase):
         self.assertEqual(source["FabricPattern"], "Floral")
         self.assertNotIn("PatternName", source)
         self.assertEqual(source["Notes"], "PatternName is just text")
+
+    def test_v14_upgrade_preserves_old_saved_plan_and_reporting(self):
+        self.db.save_piece(fabric(Color="Red", UsableWidth="12", UsableLength="22"))
+        self.db.add_quilt_mapping(self.quilt_id, 2, "Red", "Red")
+        plan_id = self.db.create_quilt_plan(self.quilt_id, 3)
+        old = self.db.get_quilt_plan(plan_id)["PlanData"]
+        for use in old["uses"]:
+            for record in use["parts"]:
+                record.pop("MinimumColorValue")
+                record.pop("MaximumColorValue")
+        for entry in old["sources"]:
+            entry["source"].pop("ColorValue")
+            for cut in entry["cuts"]:
+                cut.pop("MinimumColorValue")
+                cut.pop("MaximumColorValue")
+        with self.db.connection:
+            self.db.connection.execute("UPDATE QuiltPlan SET PlanData=? WHERE ID=?", (json.dumps(old), plan_id))
+            downgrade_color_value_schema(self.db.connection)
+            self.db.connection.execute("PRAGMA user_version=14")
+        path = self.db.path
+        self.db.close()
+        self.db = Database(path, upgrade=True)
+        plan = self.db.get_quilt_plan(plan_id)
+        self.assertEqual(plan["PlanData"], old)
+        self.assertIn("Cutting list:", cutting_list_description(plan, "Entire Quilt"))
+        regenerated = self.db.get_quilt_plan(self.db.create_quilt_plan(self.quilt_id, 3))["PlanData"]
+        self.assertFalse(regenerated["missing"])
 
     def test_quilts_share_approved_version_and_conflicts_are_rejected(self):
         second = self.db.add_quilt("Another")

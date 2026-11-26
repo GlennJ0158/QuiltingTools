@@ -46,11 +46,16 @@ HISTORY_FILTER_FIELDS = (
 )
 
 SCREEN_HELP = {
+    "Eligible Fabrics": ("Review fabrics matching a block part's color value range.",
+                         "Choose a part to list value-eligible available fabric in the Fabric working "
+                         "selection. Map inventory colors on the Quilt screen; planning also checks "
+                         "those mappings and the size of each piece."),
     "Quilt": ("Compose a quilt and plan its cuts.", "Create or select a quilt; choose approved block "
               "versions and their quantities. Map each part color to one or more inventory color "
               "values, then choose Plan Quilt. Plans pack conservative cut bounding rectangles, "
               "can report shortages and do not reserve or change inventory. Existing plans are "
               "snapshots; regenerate after changes. Available sources follow the Fabric working list. "
+              "Eligible Fabrics lists pieces matching a selected part's optional color value range. "
               "Choose Entire Quilt or By Block, then "
               "Print Quilt Plan to print the saved plan."),
     "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
@@ -275,6 +280,10 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
+    "BlockPartChoice": ("Choose a block part.", "Select a part to see available fabric pieces "
+                        "that match its optional color value range."),
+    "ColorValue": ("Choose the fabric's lightness value.", "Optional: 1 is very light and 10 is "
+                   "very dark. Leave blank if unknown. Ranged block parts cannot use unknown values."),
     "TemplateName": ("Choose a block template.", "Select a template. Its description appears below; "
                      "Create makes an editable draft using the QuiltBlock form's dimensions."),
     "PaletteColor": ("Choose the sketch color.", "Select a palette color for the highlighted source fabric. "
@@ -294,6 +303,10 @@ FIELD_HELP = {
     "QuiltPlanDetails": ("Review the cutting plan.", "Shows source IDs, allocations, cutting bounds and shortages."),
     **{field.name: (f"Enter {field.label.lower()}.", f"Enter the {field.label.lower()} for this block or part.")
        for field in (*BLOCK_FIELDS, *PART_FIELDS)},
+    "MinimumColorValue": ("Choose the minimum fabric color value.", "Set both limits from 1 to 10 "
+                          "with minimum no greater than maximum, or leave both blank for no restriction."),
+    "MaximumColorValue": ("Choose the maximum fabric color value.", "Set both limits from 1 to 10 "
+                          "with minimum no greater than maximum, or leave both blank for no restriction."),
     "Placement": ("Choose an instance to position.", "Select a numbered part instance."),
     "PositionX": ("Enter its horizontal position.", "Unscaled distance from the left edge in inches."),
     "PositionY": ("Enter its vertical position.", "Unscaled distance from the top edge in inches."),
@@ -381,6 +394,8 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
+    "Eligible Fabrics": ("Review fabric values for a block part.", "Choose an approved block, then "
+                         "review available pieces matching each part's color value range."),
     "Create": ("Create the selected template.", "Create an editable draft with the dimensions, "
                "scale and seam allowance from the QuiltBlock form."),
     "Create from Template": ("Create a block from a named template.",
@@ -486,6 +501,7 @@ BUTTON_HELP = {
 }
 
 SCREEN_FIELDS = {
+    "Eligible Fabrics": (Field("BlockPartChoice"),),
     "Quilt": (Field("QuiltName"), Field("SavedQuilt"), Field("ApprovedBlock"), Field("Quantity"),
               Field("PartColor"), Field("InventoryColor"), Field("SavedQuiltPlan"), Field("QuiltReportFormat"),
               Field("QuiltPlanDetails")),
@@ -540,6 +556,7 @@ SCREEN_FIELDS = {
     "Screen Help": (Field("HelpContent"),),
 }
 SCREEN_COLUMNS = {
+    "Eligible Fabrics": ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength"),
     "QuiltBlock": BLOCK_COLUMNS,
     "Block Parts": ("ID", "PartName", "Shape", "PartColor", "NumberInBlock"),
     "ErrorMessage": ERROR_COLUMNS,
@@ -554,7 +571,8 @@ SCREEN_COLUMNS = {
 }
 SCREEN_BUTTONS = {
     "Quilt": ("Add Quilt", "Set Block Quantity", "Remove Block", "Map Color", "Remove Mapping",
-              "Plan Quilt", "Print Quilt Plan"),
+              "Eligible Fabrics", "Plan Quilt", "Print Quilt Plan"),
+    "Eligible Fabrics": ("Close",),
     "QuiltBlock": ("Add", "Update", "Create from Template", "Create", "Cancel", "Delete", "Clear",
                    "New Version", "Parts", "Sketch", "Approve",
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),

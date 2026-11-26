@@ -8,7 +8,7 @@ from unittest.mock import patch
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.errors import ERROR_FIELDS, ERROR_FILTER_FIELDS, OLD_CONFLICT_REFERENCE, STARTUP_MESSAGES, TROUBLESHOOTING
 from quilting.model import FieldError
-from tests.test_inventory import assert_legacy_rows_preserved, downgrade_dropdown_schema, fabric
+from tests.test_inventory import assert_legacy_rows_preserved, downgrade_color_value_schema, downgrade_dropdown_schema, fabric
 
 
 def error_values(**overrides):
@@ -178,6 +178,7 @@ class ErrorMessageTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 3")
         tables = ("FabricPiece", "FabricHistory", "SelectionSet", "SelectionMember",
                   "ErrorText", "Dropdown", "HelpText", "ScreenState")

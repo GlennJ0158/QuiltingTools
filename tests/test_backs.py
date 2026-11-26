@@ -9,7 +9,7 @@ from quilting.backs import (
 )
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
-from tests.test_inventory import downgrade_dropdown_schema, fabric
+from tests.test_inventory import downgrade_color_value_schema, downgrade_dropdown_schema, fabric
 
 
 class QuiltBackPlanningTests(unittest.TestCase):
@@ -72,6 +72,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             )
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 12")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -101,6 +102,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
                 "UPDATE QuiltBackCutSource SET BeforeValues=?, AfterValues=? WHERE QuiltBackID=?",
                 (*snapshots, back_id))
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=13")
         self.db.close()
         self.db = Database(self.path, upgrade=True)
@@ -179,7 +181,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
         sources = [
             self.add_piece(FabricName=f"Backing {index}", Color="Green",
                            UsableWidth="42", UsableLength="60",
-                           GrainDirection="Along Width")
+                           GrainDirection="Along Width", ColorValue="8")
             for index in range(2)
         ]
         pieces = [self.db.get_piece(source_id) for source_id in sources]
@@ -210,6 +212,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             (back_id, sources[0]),
         ).fetchone()[0]
         self.assertEqual(self.db.get_piece(remnant_id)["UsableWidth"], 30 * INCH)
+        self.assertEqual(self.db.get_piece(remnant_id)["ColorValue"], 8)
         self.assertEqual(self.db.history(remnant_id)[0]["Action"], "Added")
         self.assertEqual(self.db.history(sources[0])[0]["Action"], "Updated")
         assembled = self.db.mark_quilt_back_assembled(back_id)
@@ -249,6 +252,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
                 self.db.connection.execute(f"DROP TABLE {table}")
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -297,6 +301,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             downgrade_dropdown_schema(connection)
             connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(connection)
             connection.execute("PRAGMA user_version = 6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -344,6 +349,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
             self.db.connection.execute("ALTER TABLE QuiltBackPanelOld RENAME TO QuiltBackPanel")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 11")
         self.db.close()
         with self.assertRaises(UpgradeRequired):

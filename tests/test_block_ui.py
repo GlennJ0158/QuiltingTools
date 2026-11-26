@@ -8,7 +8,7 @@ from tkinter import font as tkfont
 from unittest.mock import patch
 
 from quilting.database import Database
-from quilting.ui import Application, Form
+from quilting.ui import Application, Form, RecordList
 from tests.test_blocks import block, part
 from tests.test_ui import descendants
 from tests.test_inventory import fabric
@@ -101,6 +101,51 @@ class BlockUITests(unittest.TestCase):
         self.assertEqual(saved["FinishedWidth"], 12_000_000)
         self.assertEqual(saved["FinishedLength"], 10_000_000)
         self.assertEqual(self.app.block_list.tree.selection(), (str(self.app.block_id),))
+        self.errors.assert_not_called()
+
+    def test_spiral_parts_allow_user_to_edit_center_value_range(self):
+        block_id = self.db.create_block_template("Log Cabin (Spiral)", block())
+        self.app.refresh_blocks(block_id)
+        self.click(self.app.block_page, "Parts")
+        window = self.app.dialogs[-1]
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        center = next(row for row in self.db.block_parts(block_id) if row["PartName"] == "Center")
+        listing.tree.selection_set(str(center["ID"]))
+        self.root.update()
+        form.variables["PartColor"].set("Blue")
+        form.variables["MinimumColorValue"].set("3")
+        form.variables["MaximumColorValue"].set("6")
+        self.click(window, "Update")
+        saved = next(row for row in self.db.block_parts(block_id) if row["ID"] == center["ID"])
+        self.assertEqual((saved["PartColor"], saved["MinimumColorValue"], saved["MaximumColorValue"]),
+                         ("Blue", 3, 6))
+        self.errors.assert_not_called()
+
+    def test_eligible_fabrics_dialog_observes_part_range_and_working_selection(self):
+        block_id = self.db.create_block_template("Log Cabin (Spiral)", block())
+        self.db.approve_block(block_id, 1)
+        ids = [self.db.save_piece(fabric(FabricName=f"Value {value}", ColorValue=value))
+               for value in ("1", "4", "5", "7", "10", "")]
+        self.app.selected_ids = ids[:-2]
+        self.app.show_screen("Quilt")
+        self.app.refresh_quilts()
+        choice = next(label for label, saved_id in self.app.approved_blocks.items() if saved_id == block_id)
+        self.app.quilt_form.variables["ApprovedBlock"].set(choice)
+        self.click(self.app.quilt_page, "Eligible Fabrics")
+        window = self.app.dialogs[-1]
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        for side, expected in (("Inner top log", ids[:2]), ("Inner right log", [ids[3]]),
+                               ("Center", ids[:4])):
+            label = next(value for value in form.widgets["BlockPartChoice"].cget("values") if side in value)
+            form.variables["BlockPartChoice"].set(label)
+            form.widgets["BlockPartChoice"].event_generate("<<ComboboxSelected>>")
+            self.root.update()
+            self.assertEqual(set(listing.tree.get_children()), set(map(str, expected)))
+        for widget in descendants(window):
+            if isinstance(widget, (ttk.Button, ttk.Entry)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
         self.errors.assert_not_called()
 
     def test_scale_displays_plain_percentage_without_changing_values_or_range(self):

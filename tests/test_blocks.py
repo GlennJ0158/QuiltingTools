@@ -7,7 +7,7 @@ from quilting.blocks import cutting_shape, finished_shape, parse_part, validate_
 from quilting.block_templates import BLOCK_TEMPLATES
 from quilting.database import Database, UpgradeRequired
 from quilting.model import FieldError
-from tests.test_inventory import downgrade_dropdown_schema
+from tests.test_inventory import downgrade_color_value_schema, downgrade_dropdown_schema
 
 
 def block(**overrides):
@@ -18,7 +18,7 @@ def block(**overrides):
 def part(**overrides):
     return {"PartName": "Panel", "Shape": "Rectangle", "PartColor": "Red", "NumberInBlock": "2",
             "PartWidth": "5", "PartLength": "10", "SideA": "", "SideB": "", "SideC": "",
-            "Diameter": "", **overrides}
+            "Diameter": "", "MinimumColorValue": "", "MaximumColorValue": "", **overrides}
 
 
 class BlockTests(unittest.TestCase):
@@ -96,6 +96,51 @@ class BlockTests(unittest.TestCase):
                         current, self.db.block_parts(block_id), self.db.block_placements(block_id)), [])
                     self.db.approve_block(block_id, current["Revision"])
 
+    def test_log_cabin_spiral_light_dark_ranges_and_square_original(self):
+        spiral_id = self.db.create_block_template(
+            "Log Cabin (Spiral)", block(FinishedWidth="12.000001", FinishedLength="10"))
+        parts = {p["PartName"]: p for p in self.db.block_parts(spiral_id)}
+        self.assertEqual(len(parts), 9)
+        self.assertEqual(parts["Center"]["Shape"], "Square")
+        self.assertEqual(parts["Center"]["PartWidth"], parts["Center"]["PartLength"])
+        self.assertEqual((parts["Center"]["MinimumColorValue"], parts["Center"]["MaximumColorValue"]),
+                         (None, None))
+        for side in ("top", "left", "bottom", "right"):
+            for ring in ("Inner", "Outer"):
+                item = parts[f"{ring} {side} log"]
+                expected = ("White", 1, 4) if side in ("top", "left") else ("Black", 7, 10)
+                self.assertEqual((item["PartColor"], item["MinimumColorValue"], item["MaximumColorValue"]),
+                                 expected)
+        placements = {p["BlockPartID"]: p for p in self.db.block_placements(spiral_id)}
+        # The inner bottom and left logs continue around the preceding logs, not concentric rings.
+        center = parts["Center"]
+        bottom, left = parts["Inner bottom log"], parts["Inner left log"]
+        self.assertEqual(placements[bottom["ID"]]["X"], placements[center["ID"]]["X"])
+        self.assertEqual(placements[left["ID"]]["Y"], placements[center["ID"]]["Y"])
+        self.assertEqual(validate_layout(self.db.get_block(spiral_id), list(parts.values()),
+                                         list(placements.values())), [])
+        square_id = self.db.create_block_template("Log Cabin (Square)", block())
+        square = {p["PartName"]: p for p in self.db.block_parts(square_id)}
+        self.assertEqual(square["Inner top log"]["PartColor"], "Red")
+        self.assertEqual(square["Inner bottom log"]["PartColor"], "Red")
+        self.assertEqual(square["Outer top log"]["PartColor"], "Blue")
+        self.assertIsNone(square["Outer top log"]["MinimumColorValue"])
+        self.db.approve_block(spiral_id, 1)
+        copy_id = self.db.copy_block(spiral_id)
+        copied = {p["PartName"]: p for p in self.db.block_parts(copy_id)}
+        self.assertEqual(copied["Inner right log"]["MinimumColorValue"], 7)
+        self.assertEqual(copied["Inner right log"]["MaximumColorValue"], 10)
+
+    def test_color_value_range_requires_valid_ordered_pair(self):
+        for minimum, maximum in (("1", ""), ("", "4"), ("5", "4"), ("0", "4"), ("1", "11")):
+            with self.subTest(minimum=minimum, maximum=maximum), self.assertRaises(FieldError):
+                parse_part(part(MinimumColorValue=minimum, MaximumColorValue=maximum))
+        parsed = parse_part(part(MinimumColorValue="1", MaximumColorValue="10"))
+        self.assertEqual((parsed["MinimumColorValue"], parsed["MaximumColorValue"]), (1, 10))
+        with self.assertRaises(FieldError) as raised:
+            parse_part(part(MinimumColorValue="8", MaximumColorValue="2"))
+        self.assertIn("minimum cannot exceed the maximum", self.db.error_message(raised.exception))
+
     def test_unknown_template_does_not_create_a_block(self):
         with self.assertRaises(FieldError):
             self.db.create_block_template("Unknown", block())
@@ -151,6 +196,7 @@ class BlockTests(unittest.TestCase):
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=6")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -183,6 +229,7 @@ class BlockTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE DropdownCurrent")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version=8")
         self.db.close()
         self.db = Database(self.path, upgrade=True)

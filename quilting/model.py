@@ -8,6 +8,7 @@ from fractions import Fraction
 UNITS_PER_INCH = 1_000_000
 MAX_INCHES = 10_800
 ADD_ITEM = "Add Item"
+COLOR_VALUES = tuple(str(value) for value in range(1, 11))
 GRAIN_DIRECTIONS = ("Unknown", "Along Length", "Along Width")
 PRINT_DIRECTIONS = ("Non-directional", "Along Length", "Along Width", "Unknown")
 STATUSES = ("Available", "Retired")
@@ -48,6 +49,7 @@ FABRIC_FIELDS = (
     Field("PrintDirection", "choice", True, PRINT_DIRECTIONS, default="Unknown"),
     Field("StorageLocation", "dropdown"),
     Field("Status", "choice", True, STATUSES, default="Available"),
+    Field("ColorValue", "choice", choices=("", *COLOR_VALUES), width=4),
     Field("Notes", "memo", limit=4000, width=40),
 )
 FILTER_FIELDS = (
@@ -65,9 +67,9 @@ FABRIC_NAMES = tuple(field.name for field in FABRIC_FIELDS)
 DROPDOWN_FIELDS = {field.name: field for field in FABRIC_FIELDS if field.kind in ("dropdown", "choice")}
 NUMERIC_COLUMNS = frozenset(("ID", "UsableWidth", "UsableLength", "BackWidth", "BackLength",
                              "Revision", "RecordCount", "Def", "Use",
-                             "FinishedWidth", "FinishedLength", "Scale", "NumberInBlock"))
+                             "FinishedWidth", "FinishedLength", "Scale", "NumberInBlock", "ColorValue"))
 LIST_COLUMNS = (
-    "ID", "FabricName", "Color", "FabricPattern", "UsableWidth", "UsableLength",
+    "ID", "FabricName", "Color", "ColorValue", "FabricPattern", "UsableWidth", "UsableLength",
     "GrainDirection", "PrintDirection", "StorageLocation", "Status",
 )
 SORT_FIELDS = (*LIST_COLUMNS, "DateCreated", "DateModified")
