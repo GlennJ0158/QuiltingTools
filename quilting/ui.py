@@ -100,13 +100,16 @@ class Form(ttk.Frame):
 
     def __init__(self, parent, fields, columns=2, style="TFrame", database=None,
                  memo_height=None, memo_width=None, memo_scrollbars=False,
-                 dropdown_scope="FabricPiece", wide_memos=(), allow_blank_choices=(), help_names=None):
+                 dropdown_scope="FabricPiece", wide_memos=(), allow_blank_choices=(), help_names=None,
+                 allow_field_apply=False):
         super().__init__(parent, padding=8, style=style)
         self.fields = tuple(fields)
         self.database = database
         self.dropdown_scope = dropdown_scope
         self.allow_blank_choices = allow_blank_choices
         self.variables, self.widgets, self.labels = {}, {}, {}
+        self.apply_variables, self.apply_checks, self.label_positions = {}, {}, {}
+        self.apply_mode = False
         self.previous_choices = {}
         help_names = help_names or {}
         owner = self.winfo_toplevel().help_owner
@@ -124,6 +127,15 @@ class Form(ttk.Frame):
             label.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
             help_name = help_names.get(field.name, field.name)
             owner.attach_help(label, help_name)
+            if allow_field_apply:
+                apply_variable = tk.BooleanVar(master=self, value=False)
+                apply_check = ttk.Checkbutton(self, text=f"Apply {label_text}", variable=apply_variable)
+                apply_check.grid(row=row, column=column, sticky="w", padx=(4, 8), pady=4)
+                apply_check.grid_remove()
+                self.apply_variables[field.name] = apply_variable
+                self.apply_checks[field.name] = apply_check
+                self.label_positions[field.name] = (row, column)
+                owner.attach_help(apply_check, help_name)
             variable = tk.StringVar(master=self, value=field.default)
             container = None
             if field.kind == "memo":
@@ -250,6 +262,24 @@ class Form(ttk.Frame):
             for field in self.fields
         })
 
+    def set_apply_mode(self, enabled):
+        self.apply_mode = enabled
+        for field in self.fields:
+            if enabled:
+                self.labels[field.name].grid_remove()
+                row, column = self.label_positions[field.name]
+                self.apply_checks[field.name].grid(
+                    row=row, column=column, sticky="w", padx=(4, 8), pady=4,
+                )
+            else:
+                self.apply_checks[field.name].grid_remove()
+                self.apply_variables[field.name].set(False)
+                self.labels[field.name].grid()
+
+    def apply_values(self):
+        values = self.values()
+        return {name: values[name] for name, variable in self.apply_variables.items() if variable.get()}
+
     def focus_field(self, name):
         if name in self.widgets:
             self.widgets[name].focus_set()
@@ -342,6 +372,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.selection_description = ""
         self.sort = self.db.load_sort()
         self.piece_id = self.revision = None
+        self.bulk_revisions = {}
         self.last_selection = ()
         root.title(f"Quilting Tools v{VERSION} - Fabric Inventory")
         root.geometry("1250x800")
@@ -375,7 +406,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         entry = ttk.Frame(body, style="Entry.TFrame")
         entry.pack(fill="x")
         self.form = Form(entry, FABRIC_FIELDS, style="Entry.TFrame", database=self.db,
-                         memo_height=2, memo_scrollbars=True, wide_memos=("Notes",))
+                         memo_height=2, memo_scrollbars=True, wide_memos=("Notes",),
+                         allow_field_apply=True)
         self.form.pack(fill="x")
         self.details = ttk.Label(entry, text="New fabric rectangle", padding=(8, 4), style="Entry.TLabel")
         self.details.pack(anchor="w")
@@ -573,7 +605,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         return widget
 
     def dirty(self):
-        return self.form.values() != self.initial_values
+        return (self.form.values() != self.initial_values
+                or any(variable.get() for variable in self.form.apply_variables.values()))
 
     def allow_discard(self):
         return not self.dirty() or messagebox.askyesno(
@@ -582,7 +615,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
 
     def clear_details(self):
         self.piece_id = self.revision = None
+        self.bulk_revisions = {}
         self.form.defaults()
+        self.form.set_apply_mode(False)
         self.initial_values = self.form.values()
         self.details.configure(text="New fabric rectangle")
         self.add_button.state(["!disabled"])
@@ -616,13 +651,24 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         else:
             self.clear_details()
             if selected:
-                self.details.configure(text=f"{len(selected)} highlighted; choose one record to edit.")
+                piece_ids = [int(item) for item in selected]
+                self.bulk_revisions = {
+                    piece_id: self.db.get_piece(piece_id)["Revision"] for piece_id in piece_ids
+                }
+                self.form.set_apply_mode(True)
+                self.details.configure(
+                    text=f"{len(selected)} highlighted; check fields to apply to every selected piece. "
+                         "A blank checked optional field clears it.",
+                )
                 self.add_button.state(["disabled"])
+                self.update_button.state(["!disabled"])
         self.last_selection = selected
 
-    def refresh(self, prefer_id=None):
+    def refresh(self, prefer_id=None, prefer_ids=None):
         rows = self.db.pieces(self.filters, self.selected_ids, self.sort)
-        keep = (str(prefer_id),) if prefer_id is not None else self.list.tree.selection()
+        keep = ((str(prefer_id),) if prefer_id is not None else
+                tuple(str(piece_id) for piece_id in prefer_ids) if prefer_ids is not None else
+                self.list.tree.selection())
         self.rows = rows
         context = f"; {self.selection_description}" if self.selection_description else ""
         active_filters = [f"{caption(name)}={value}" for name, value in self.filters.items() if value]
@@ -658,7 +704,18 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.saved_status(piece_id, "Added")
 
     def update(self):
-        if self.piece_id is None or self.list.tree.selection() != (str(self.piece_id),):
+        selected = self.list.tree.selection()
+        if len(selected) > 1:
+            changes = self.form.apply_values()
+            if not changes:
+                raise FieldError("Required", "Update")
+            piece_ids = [int(item) for item in selected]
+            self.db.update_pieces(piece_ids, self.bulk_revisions, changes)
+            self.initial_values = self.form.values()
+            self.refresh(prefer_ids=piece_ids)
+            self.status.configure(text=f"Updated fabric pieces {', '.join(map(str, piece_ids))}.")
+            return
+        if self.piece_id is None or selected != (str(self.piece_id),):
             raise FieldError("OneRecord", "Fabric Inventory")
         piece_id = self.db.save_piece(self.form.values(), self.piece_id, self.revision)
         self.initial_values = self.form.values()

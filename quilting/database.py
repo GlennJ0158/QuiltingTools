@@ -24,7 +24,7 @@ from .errors import (
 )
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
-    SORT_FIELDS, Field, FieldError, caption, measurement, normalize_sort, validate_fields,
+    SORT_FIELDS, Field, FieldError, caption, display_measurement, measurement, normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
@@ -1704,6 +1704,43 @@ class Database:
         return dict(row)
 
     def save_piece(self, values, piece_id=None, revision=None):
+        with self.connection:
+            return self._save_piece(values, piece_id, revision)
+
+    def update_pieces(self, piece_ids, expected_revisions, changes):
+        piece_ids = tuple(piece_ids)
+        if not piece_ids or len(set(piece_ids)) != len(piece_ids):
+            raise FieldError("NoHighlight", "Fabric Inventory")
+        if not isinstance(expected_revisions, dict):
+            raise FieldError("Binding", "FabricPieceID", detail="selected record revisions are missing")
+        if set(expected_revisions) != set(piece_ids):
+            raise FieldError("Binding", "FabricPieceID", detail="selected record revisions do not match")
+        if not isinstance(changes, dict):
+            raise FieldError("Binding", "FabricPiece", detail="bulk update fields must be a mapping")
+        if not changes or not set(changes) <= set(FABRIC_NAMES):
+            if not changes:
+                raise FieldError("Required", "Update")
+            raise FieldError("Binding", "FabricPiece", detail="unknown fields in bulk update")
+        with self.connection:
+            for piece_id in piece_ids:
+                row = self.get_piece(piece_id)
+                revision = expected_revisions[piece_id]
+                if row["Revision"] != revision:
+                    raise FieldError("Conflict", "FabricPieceID")
+                values = {
+                    field.name: (
+                        display_measurement(row[field.name])
+                        if field.kind == "length" and row[field.name] is not None
+                        else "" if field.kind == "length" or row[field.name] is None
+                        else str(row[field.name])
+                    )
+                    for field in FABRIC_FIELDS
+                }
+                values.update(changes)
+                self._save_piece(values, piece_id, revision)
+        return tuple(piece_ids)
+
+    def _save_piece(self, values, piece_id=None, revision=None):
         if set(values) != set(FABRIC_NAMES):
             validate_fields(FABRIC_FIELDS, values)
         values = {
@@ -1713,42 +1750,41 @@ class Database:
         clean = self._validate_fields(FABRIC_FIELDS, values, "FabricPiece")
         clean["ColorValue"] = int(clean["ColorValue"]) if clean["ColorValue"] else None
         timestamp = now()
-        with self.connection:
-            for name in DROPDOWN_FIELDS:
-                if DROPDOWN_FIELDS[name].kind == "dropdown":
-                    if not clean[name]:
-                        clean[name] = None
-                    else:
-                        clean[name] = self._dropdown_item(name, clean[name])
-            if piece_id is None:
-                columns = ", ".join(FABRIC_NAMES)
-                placeholders = ", ".join("?" for _ in FABRIC_NAMES)
-                cursor = self.connection.execute(
-                    f"INSERT INTO FabricPiece ({columns}, DateCreated, DateModified) "
-                    f"VALUES ({placeholders}, ?, ?)", (*clean.values(), timestamp, timestamp),
-                )
-                piece_id, before, action = cursor.lastrowid, None, "Added"
-            else:
-                before = self.get_piece(piece_id)
-                if before["Revision"] != revision:
-                    raise FieldError("Conflict", "FabricPieceID")
-                if all(before[name] == value for name, value in clean.items()):
-                    return piece_id
-                assignments = ", ".join(f"{name} = ?" for name in FABRIC_NAMES)
-                cursor = self.connection.execute(
-                    f"UPDATE FabricPiece SET {assignments}, Revision = Revision + 1, DateModified = ? "
-                    "WHERE ID = ? AND Revision = ?",
-                    (*clean.values(), timestamp, piece_id, revision),
-                )
-                if cursor.rowcount != 1:
-                    raise FieldError("Conflict", "FabricPieceID")
-                action = "Updated"
-            after = self.get_piece(piece_id)
-            self.connection.execute(
-                "INSERT INTO FabricHistory (FabricPieceID, Action, BeforeValues, AfterValues, DateCreated) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (piece_id, action, json.dumps(before) if before else None, json.dumps(after), timestamp),
+        for name in DROPDOWN_FIELDS:
+            if DROPDOWN_FIELDS[name].kind == "dropdown":
+                if not clean[name]:
+                    clean[name] = None
+                else:
+                    clean[name] = self._dropdown_item(name, clean[name])
+        if piece_id is None:
+            columns = ", ".join(FABRIC_NAMES)
+            placeholders = ", ".join("?" for _ in FABRIC_NAMES)
+            cursor = self.connection.execute(
+                f"INSERT INTO FabricPiece ({columns}, DateCreated, DateModified) "
+                f"VALUES ({placeholders}, ?, ?)", (*clean.values(), timestamp, timestamp),
             )
+            piece_id, before, action = cursor.lastrowid, None, "Added"
+        else:
+            before = self.get_piece(piece_id)
+            if before["Revision"] != revision:
+                raise FieldError("Conflict", "FabricPieceID")
+            if all(before[name] == value for name, value in clean.items()):
+                return piece_id
+            assignments = ", ".join(f"{name} = ?" for name in FABRIC_NAMES)
+            cursor = self.connection.execute(
+                f"UPDATE FabricPiece SET {assignments}, Revision = Revision + 1, DateModified = ? "
+                "WHERE ID = ? AND Revision = ?",
+                (*clean.values(), timestamp, piece_id, revision),
+            )
+            if cursor.rowcount != 1:
+                raise FieldError("Conflict", "FabricPieceID")
+            action = "Updated"
+        after = self.get_piece(piece_id)
+        self.connection.execute(
+            "INSERT INTO FabricHistory (FabricPieceID, Action, BeforeValues, AfterValues, DateCreated) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (piece_id, action, json.dumps(before) if before else None, json.dumps(after), timestamp),
+        )
         return piece_id
 
     def save_back_draft(self, back_name, quilt_width, quilt_length, margin, seam_allowance, layout,

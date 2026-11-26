@@ -210,6 +210,52 @@ class DatabaseTests(unittest.TestCase):
             other.close()
         self.assertEqual(self.db.get_piece(piece_id)["Color"], "Green")
 
+    def test_bulk_update_changes_only_selected_fields_and_records_history(self):
+        first = self.db.save_piece(fabric(
+            FabricName="Blue cotton", Color="Red", UsableWidth="40", Notes="First piece",
+        ))
+        second = self.db.save_piece(fabric(
+            FabricName="Green cotton", Color="Blue", UsableWidth="42", Notes="Second piece",
+        ))
+        revisions = {first: 1, second: 1}
+
+        self.db.update_pieces([first, second], revisions, {"Color": "Yellow", "ColorValue": "7"})
+
+        for piece_id, width, fabric_name, notes in (
+                (first, 40_000_000, "Blue cotton", "First piece"),
+                (second, 42_000_000, "Green cotton", "Second piece")):
+            row = self.db.get_piece(piece_id)
+            self.assertEqual((row["Color"], row["ColorValue"]), ("Yellow", 7))
+            self.assertEqual((row["UsableWidth"], row["FabricName"], row["Notes"]),
+                             (width, fabric_name, notes))
+            self.assertEqual([entry["Action"] for entry in self.db.history(piece_id)],
+                             ["Updated", "Added"])
+
+        self.db.update_pieces(
+            [first, second], {first: 2, second: 2}, {"Color": ""},
+        )
+        self.assertIsNone(self.db.get_piece(first)["Color"])
+        self.assertIsNone(self.db.get_piece(second)["Color"])
+
+    def test_bulk_update_rolls_back_all_records_on_conflict_or_history_failure(self):
+        first = self.db.save_piece(fabric(FabricName="First"))
+        second = self.db.save_piece(fabric(FabricName="Second"))
+        self.db.save_piece(fabric(FabricName="Changed elsewhere"), second, 1)
+        with self.assertRaises(FieldError):
+            self.db.update_pieces([first, second], {first: 1, second: 1}, {"Color": "Red"})
+        self.assertIsNone(self.db.get_piece(first)["Color"])
+        self.assertEqual(len(self.db.history(first)), 1)
+
+        self.db.connection.execute(
+            f"CREATE TRIGGER FailSecondHistory BEFORE INSERT ON FabricHistory "
+            f"WHEN NEW.FabricPieceID = {second} BEGIN SELECT RAISE(ABORT, 'history write failed'); END"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.update_pieces([first, second], {first: 1, second: 2}, {"Color": "Red"})
+        self.assertIsNone(self.db.get_piece(first)["Color"])
+        self.assertIsNone(self.db.get_piece(second)["Color"])
+        self.assertEqual(len(self.db.history(first)), 1)
+
     def test_inventory_and_history_commit_together(self):
         self.db.connection.execute(
             "CREATE TRIGGER FailHistory BEFORE INSERT ON FabricHistory "
