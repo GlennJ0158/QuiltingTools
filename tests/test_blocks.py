@@ -101,8 +101,9 @@ class BlockTests(unittest.TestCase):
             "Log Cabin (Spiral)", block(FinishedWidth="12.000001", FinishedLength="10"))
         parts = {p["PartName"]: p for p in self.db.block_parts(spiral_id)}
         self.assertEqual(len(parts), 9)
-        self.assertEqual(parts["Center"]["Shape"], "Square")
-        self.assertEqual(parts["Center"]["PartWidth"], parts["Center"]["PartLength"])
+        self.assertEqual(parts["Center"]["Shape"], "Rectangle")
+        self.assertEqual((parts["Center"]["PartWidth"], parts["Center"]["PartLength"]),
+                         (2_400_000, 2_000_000))
         self.assertEqual((parts["Center"]["MinimumColorValue"], parts["Center"]["MaximumColorValue"]),
                          (None, None))
         for side in ("top", "left", "bottom", "right"):
@@ -130,6 +131,26 @@ class BlockTests(unittest.TestCase):
         copied = {p["PartName"]: p for p in self.db.block_parts(copy_id)}
         self.assertEqual(copied["Inner right log"]["MinimumColorValue"], 7)
         self.assertEqual(copied["Inner right log"]["MaximumColorValue"], 10)
+
+    def test_spiral_center_follows_block_proportions_and_preserves_saved_blocks(self):
+        existing = self.db.add_block(block(BlockName="Existing"))
+        self.db.save_block_part(existing, 1, part(PartName="Existing center", Shape="Square",
+                                                 NumberInBlock="1", PartWidth="2", PartLength="2"))
+        before = self.db.block_parts(existing)
+        for width, length, center_width, center_length, shape in (
+                ("12", "10", 2_400_000, 2_000_000, "Rectangle"),
+                ("10", "12", 2_000_000, 2_400_000, "Rectangle"),
+                ("12", "12", 2_400_000, 2_400_000, "Square")):
+            with self.subTest(width=width, length=length):
+                block_id = self.db.create_block_template(
+                    "Log Cabin (Spiral)", block(FinishedWidth=width, FinishedLength=length))
+                parts = self.db.block_parts(block_id)
+                center = next(item for item in parts if item["PartName"] == "Center")
+                self.assertEqual((center["Shape"], center["PartWidth"], center["PartLength"]),
+                                 (shape, center_width, center_length))
+                self.assertEqual(validate_layout(self.db.get_block(block_id), parts,
+                                                 self.db.block_placements(block_id)), [])
+        self.assertEqual(self.db.block_parts(existing), before)
 
     def test_color_value_range_requires_valid_ordered_pair(self):
         for minimum, maximum in (("1", ""), ("", "4"), ("5", "4"), ("0", "4"), ("1", "11")):

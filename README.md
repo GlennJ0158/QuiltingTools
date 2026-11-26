@@ -251,7 +251,8 @@ allowance. Starter layouts include Four Patch, Nine Patch, Flying Geese,
 Log Cabin (Square), Log Cabin (Spiral), and Half-Square Triangle. Square retains
 the original concentric layout. Spiral uses light top/left logs (values 1–4)
 and dark bottom/right logs (values 7–10), with a stepped rather than straight
-diagonal boundary. Its center is unrestricted and defaults to yellow; edit
+diagonal boundary. Its center follows the block proportions, is unrestricted
+and defaults to yellow; edit
 its color and optional value range in Parts. These are editable defaults and
 existing saved blocks are unchanged. The generated parts and placements can be
 edited before approval; colors are visual defaults. Wedding Ring is not included
