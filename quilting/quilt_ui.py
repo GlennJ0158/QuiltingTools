@@ -5,7 +5,7 @@ from html import escape
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .model import Field, FieldError, display_fractional_measurement
+from .model import Field, FieldError, display_fabric_name, display_fractional_measurement
 from .quilt_planner import matches_color_value
 from .quilt_report import cutting_list_description
 
@@ -366,7 +366,7 @@ class QuiltScreenMixin:
         for source in data["sources"]:
             fabric = source["source"]
             value = fabric.get("ColorValue")
-            lines.append(f"\nSource ID {fabric['ID']}: {fabric['FabricName']} / {fabric['Color']}; "
+            lines.append(f"\nSource {display_fabric_name(fabric['FabricName'], fabric['ID'])} / {fabric['Color']}; "
                          f"{fmt(fabric['UsableWidth'])} x {fmt(fabric['UsableLength'])} in; "
                          f"revision {fabric['Revision']}; grain {fabric['GrainDirection']}; "
                          f"print {fabric['PrintDirection']}; color value {value if value is not None else 'unknown'}")
@@ -424,7 +424,7 @@ class QuiltScreenMixin:
                               f'y="{(cut["y"] + cut["source_length"] / 2) / 1e6 * factor:.4f}" '
                               f'text-anchor="middle">{number}</text>')
             w, h = source["UsableWidth"] / 1e6 * factor, source["UsableLength"] / 1e6 * factor
-            diagrams.append(f'<h2>Source {source["ID"]}: {escape(source["FabricName"])}</h2>'
+            diagrams.append(f'<h2>Source {escape(display_fabric_name(source["FabricName"], source["ID"]))}</h2>'
                             f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">'
                             f'<rect width="{w}" height="{h}" fill="none" stroke="black"/>'
                             f'{"".join(shapes)}</svg>')

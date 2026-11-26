@@ -30,7 +30,7 @@ from .helptext import (
 )
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
-    SORT_FIELDS, Field, FieldError, caption, display_fractional_measurement, display_measurement,
+    SORT_FIELDS, Field, FieldError, caption, display_fabric_name, display_fractional_measurement, display_measurement,
     measurement, normalize_sort,
     validate_fields,
 )
@@ -335,10 +335,16 @@ class RecordList(ttk.Frame):
 
     def fill(self, rows, noun, sort, context=""):
         self.tree.delete(*self.tree.get_children())
+        if "FabricName" in self.columns:
+            font = tkfont.nametofont("TkDefaultFont")
+            width = max((font.measure(display_fabric_name(row["FabricName"], row["ID"])) + 18
+                         for row in rows), default=150)
+            self.tree.column("FabricName", width=max(150, width), stretch=False)
         has_rounded_measurement = False
         for row in rows:
             values = [
                 self.formatters[name](row[name]) if name in self.formatters
+                else display_fabric_name(row[name], row["ID"]) if name == "FabricName"
                 else self.measurement_display(row[name]) if name in (
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
@@ -1550,11 +1556,12 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         piece = self.db.get_piece(int(selected[0]))
         initial = self.back_palette.get(piece["ID"], palette_suggestion(piece["Color"]))
         window = self.dialog("Set Sketch Color", "Quilt Backs")
-        window.geometry("480x180")
+        window.geometry("480x240")
         ttk.Label(
             window,
-            text=f"{piece['FabricName']} — {piece['Color'] or '(no color recorded)'}",
-            padding=10,
+            text=f"{display_fabric_name(piece['FabricName'], piece['ID'])} — "
+                 f"{piece['Color'] or '(no color recorded)'}",
+            padding=10, wraplength=440,
         ).pack(anchor="w")
         color = tk.StringVar(master=window, value=initial)
         chooser = ttk.Combobox(
@@ -1601,7 +1608,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             else:
                 canvas.create_text(x + width / 2, y + height * .72, text="Grain unknown")
         legend = "   ".join(
-            f"Part {panel.number}: {panel.palette_color} = {panel.source_name} "
+            f"Part {panel.number}: {panel.palette_color} = {display_fabric_name(panel.source_name, panel.source_id)} "
             f"({panel.source_color or 'no color recorded'}); grain {panel.grain_axis or 'unknown'}"
             for panel in layout.panels
         )
@@ -1682,11 +1689,11 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             )
             ttk.Label(
                 window,
-                text=f"Source {source_id}: {panel['FabricName']} "
+                text=f"Source {display_fabric_name(panel['FabricName'], source_id)} "
                      f"({panel['InventoryColor'] or 'no color recorded'}), "
                      f"{display_back_measurement(panel['SourceWidth'])} × "
                      f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (~ rounded up): {planned}",
-                padding=(8, 4),
+                padding=(8, 4), wraplength=700,
             ).pack(anchor="w")
         help_names = {field.name: ("RemainingWidth" if field.name.startswith("RemainingWidth")
                                    else "RemainingLength") for field in fields}
@@ -2131,7 +2138,9 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         if self.piece_id is None:
             raise FieldError("OneRecord", "Fabric Inventory")
         piece_id = self.piece_id
-        window = self.dialog(f"Fabric Piece {piece_id} - History", "History")
+        window = self.dialog(
+            f"{display_fabric_name(self.db.get_piece(piece_id)['FabricName'], piece_id)} - History", "History",
+        )
         window.geometry("950x600")
         state = self.new_list_state(self.db.load_sort("HistorySort"), HISTORY_FILTER_FIELDS)
         listing = RecordList(window, ("ID", "Action", "DateCreated"))
@@ -2186,6 +2195,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                             value = display_fractional_measurement(value) + " in"
                         elif name in ("DateCreated", "DateModified"):
                             value = display_timestamp(value)
+                        elif name == "FabricName":
+                            value = display_fabric_name(value, piece_id)
                         lines.append(f"  {caption(name)}: {value}")
             text.configure(state="normal")
             text.delete("1.0", "end")

@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from .model import display_fabric_name
 from .model import display_fractional_measurement as _measurement
 
 
@@ -75,7 +76,7 @@ def cutting_list_description(plan, mode):
                      f"{'mirrored' if item['mirrored'] else 'not mirrored'}{value_range}")
         for source, count in group["sources"].values():
             value = source.get("ColorValue")
-            lines.append(f"    {count} from Fabric {source['ID']}: {source['FabricName']} / "
+            lines.append(f"    {count} from Fabric {display_fabric_name(source['FabricName'], source['ID'])} / "
                          f"{source['Color']}, {_measurement(source['UsableWidth'])} x "
                          f"{_measurement(source['UsableLength'])} in (revision {source['Revision']}); "
                          f"color value {value if value is not None else 'unknown'}")

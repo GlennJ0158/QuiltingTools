@@ -179,7 +179,7 @@ and choose **Generate Plans**. Color suggestions are derived from inventory text
 but can be overridden for the plan. No swatch data is added to inventory. The
 assembly sketch shades every finished panel with its palette color, marks known
 grain with arrows, identifies unknown grain, and includes a legend with the
-inventory fabric name and recorded color description.
+inventory fabric name, rectangle ID (`Fabric Name (ID)`), and recorded color description.
 
 The first planner release generates one-piece or equal-width vertical-strip or
 equal-length horizontal-strip layouts, up to 20 panels. It uses the highlighted
