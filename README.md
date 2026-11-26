@@ -19,13 +19,10 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Databases with schema versions 1 through 14 prompt for a backed-up
-upgrade to add ErrorMessage (plus HelpText before schema 3 and Dropdown in schema 1),
-working-list selections, Quilt Backs planning, generalized dropdown keys and
-QuiltBlock/Quilt design, protected list metadata, nullable optional fabric fields,
-separate quilt-back margins, the Fabric Pattern field rename, and optional
-fabric color values and block part ranges;
-declining leaves the
+automatically. The maintained upgrade path starts at database schema version 14
+and proceeds through the current schema; earlier legacy conversion routes may
+still be present but are outside the active compatibility plan. Upgrades add
+optional fabric color values and block-part ranges and later database features; declining leaves the
 database unchanged. Close all other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
@@ -35,12 +32,14 @@ Tkinter must be available in the Python installation.
 
 ### Navigation and help
 
-Every application screen and workflow window has the same top-right navigation:
+Application screens have top-right navigation:
 **Fabric / Quilt Backs / QuiltBlock / Quilt / DropDown / HelpText / ErrorMessage / Setup / Screen Help**.
-Switching screens closes unfinished dialogs, releases their modal grabs, and
-resets unsaved entry forms before showing the destination. Unsaved input requires
-confirmation; declining keeps the current screen, input and dialog intact.
-This also applies when choosing the current screen again. Saved inventory,
+Workflow dialogs stay on the current screen and provide **Screen Help** without
+the screen-navigation buttons. They open at the top-left of the first list on
+the current screen (or the screen's top-left when it has no list). Close or
+cancel a dialog, or use its save-and-return action, before choosing another
+application screen. Switching screens resets unsaved entry forms.
+Saved inventory,
 dropdown choices, help edits and selection sets are never undone by navigation.
 Fabric list filters, saved selections and sort order are retained.
 
@@ -50,6 +49,11 @@ Hover over an entry, button or list column for a tooltip; press **F1** for full
 help. For list columns, F1 uses the last column under the pointer (initially ID).
 Operating-system file pickers and confirmation/error prompts remain standard
 modal dialogs; dismiss them before using application navigation.
+
+Setup's **About Quilting Tools** block displays the application release version
+and database schema version separately. For example, application version `0.5.0`
+and schema version `16` are different numbering systems and are not expected to
+match.
 
 **HelpText** maintains a generated tooltip/full-help pair for every application
 screen/field, list column and button. Select a row, edit the multiline **Hover

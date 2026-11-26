@@ -9,7 +9,7 @@ from unittest.mock import patch
 from tkinter import ttk
 from tkinter import font as tkfont
 
-from quilting.database import ALL_DROPDOWN_SCOPE, Database
+from quilting.database import ALL_DROPDOWN_SCOPE, SCHEMA_VERSION, Database
 from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
     ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
@@ -543,6 +543,11 @@ class ScreenTests(unittest.TestCase):
         for label in ("Backup Database", "Restore Database"):
             self.assertNotIn(label, inventory_labels)
             self.assertIn(label, setup_labels)
+        about = next(widget for widget in descendants(self.app.setup_page)
+                     if isinstance(widget, ttk.Label) and "About Quilting Tools" in widget.cget("text"))
+        self.assertIn("Application version 0.5.0", about.cget("text"))
+        self.assertIn(f"Database schema {SCHEMA_VERSION}", about.cget("text"))
+        self.assertIn("upgrade path from v14", about.cget("text"))
         self.app.form.variables["Notes"].set("Unsaved fabric note")
         self.confirm.return_value = False
         self.app.nav.buttons["Setup"].invoke()
@@ -554,6 +559,17 @@ class ScreenTests(unittest.TestCase):
         self.app.nav.buttons["Fabric"].invoke()
         self.root.update()
         self.assertEqual(self.app.form.variables["Notes"].get(), "")
+
+    def test_setup_about_block_is_level_with_database_path_on_right(self):
+        self.root.deiconify()
+        self.app.show_screen("Setup")
+        self.root.update()
+        database = next(widget for widget in descendants(self.app.setup_page)
+                        if isinstance(widget, ttk.Label) and widget.cget("text").startswith("Database:"))
+        about = next(widget for widget in descendants(self.app.setup_page)
+                     if isinstance(widget, ttk.Label) and "About Quilting Tools" in widget.cget("text"))
+        self.assertEqual(database.winfo_rooty(), about.winfo_rooty())
+        self.assertGreater(about.winfo_rootx(), database.winfo_rootx())
 
     def test_dropdown_add_item_cancel_validation_order_and_default_form_values(self):
         widget = self.app.form.widgets["Color"]
@@ -771,9 +787,9 @@ class ScreenTests(unittest.TestCase):
         self.root.deiconify()
         piece_id = self.add_piece()
 
-        def verify(parent, nav):
+        def verify(parent, nav, dialog=False):
             self.root.update()
-            self.assertEqual(tuple(nav.buttons), NAVIGATION)
+            self.assertEqual(tuple(nav.buttons), ("Screen Help",) if dialog else NAVIGATION)
             buttons = list(nav.buttons.values())
             positions = [button.winfo_rootx() for button in buttons]
             self.assertEqual(positions, sorted(positions))
@@ -803,7 +819,7 @@ class ScreenTests(unittest.TestCase):
                             self.app.screen_help):
             open_dialog()
             window = self.app.dialogs[-1]
-            verify(window, window.nav)
+            verify(window, window.nav, dialog=True)
             window.destroy()
         for screen in ("DropDown", "HelpText", "ErrorMessage", "QuiltBlock", "Quilt Backs"):
             self.app.show_screen(screen)
@@ -811,11 +827,11 @@ class ScreenTests(unittest.TestCase):
                 with self.subTest(screen=screen, dialog=label):
                     self.click(self.app.screens[screen], label)
                     window = self.app.dialogs[-1]
-                    verify(window, window.nav)
+                    verify(window, window.nav, dialog=True)
                     window.destroy()
         self.app.open_back_fabric_selection()
         window = self.app.dialogs[-1]
-        verify(window, window.nav)
+        verify(window, window.nav, dialog=True)
         window.destroy()
         self.errors.assert_not_called()
 
@@ -853,7 +869,7 @@ class ScreenTests(unittest.TestCase):
         self.errors.assert_called_once()
         self.assertIn("database failure", self.errors.call_args.args[1])
 
-    def test_modal_navigation_cancellation_and_help_preserve_or_discard_the_right_work(self):
+    def test_modal_help_is_available_without_screen_navigation(self):
         piece_id = self.add_piece()
         self.app.form.variables["Notes"].set("Uncommitted fabric edit")
         self.app.open_filter()
@@ -869,49 +885,52 @@ class ScreenTests(unittest.TestCase):
         self.confirm.assert_not_called()
         help_window.destroy()
         self.assertEqual(self.root.grab_current(), window)
-        self.confirm.return_value = False
-        window.nav.buttons["Setup"].invoke()
-        self.assertTrue(window.winfo_exists())
-        self.assertEqual(self.root.grab_current(), window)
-        self.assertEqual(form.values()["MinimumWidth"], "invalid unfinished input")
-        self.assertEqual(self.app.form.values()["Notes"], "Uncommitted fabric edit")
-        self.confirm.return_value = True
-        self.confirm.reset_mock()
-        window.nav.buttons["Setup"].invoke()
+        self.assertEqual(set(window.nav.buttons), {"Screen Help"})
+        window.destroy()
         self.root.update()
-        self.confirm.assert_called_once()
-        self.assertFalse(window.winfo_exists())
         self.assertIsNone(self.root.grab_current())
         self.assertEqual(self.app.dialogs, [])
         self.assertEqual(self.app.dialog_forms, {})
-        self.assertEqual(self.app.current, "Setup")
-        self.assertEqual(self.app.filters["MinimumWidth"], "")
+        self.assertEqual(self.app.current, "Fabric")
+        self.assertEqual(self.app.form.values()["Notes"], "Uncommitted fabric edit")
         self.assertEqual(self.db.get_piece(piece_id)["Notes"], "")
-        self.assertFalse(self.db.connection.in_transaction)
-        self.app.show_screen("Fabric")
-        self.assertFalse(self.app.dirty())
-        self.assertEqual(self.app.piece_id, None)
         self.errors.assert_not_called()
 
-    def test_navigation_closes_all_workflow_dialogs_including_nested_help(self):
+    def test_workflow_dialogs_keep_screen_help_but_no_screen_navigation(self):
         piece_id = self.add_piece()
-        for open_dialog, target in (
-                (self.app.open_filter, "DropDown"), (self.app.open_sort, "HelpText"),
-                (self.app.open_sets, "Setup"),
-                (lambda: self.app.open_add_item(self.app.form, "Color"), "DropDown"),
-                (lambda: (self.app.load_piece(piece_id), self.app.open_history()), "Fabric")):
+        for open_dialog in (
+                self.app.open_filter, self.app.open_sort, self.app.open_sets,
+                lambda: self.app.open_add_item(self.app.form, "Color"),
+                lambda: (self.app.load_piece(piece_id), self.app.open_history())):
             self.app.show_screen("Fabric")
             open_dialog()
             operation = self.app.dialogs[-1]
+            self.assertEqual(set(operation.nav.buttons), {"Screen Help"})
             operation.nav.buttons["Screen Help"].invoke()
             help_window = self.app.dialogs[-1]
-            help_window.nav.buttons[target].invoke()
+            self.assertEqual(set(help_window.nav.buttons), {"Screen Help"})
+            help_window.destroy()
+            operation.destroy()
             self.root.update()
             self.assertFalse(operation.winfo_exists())
             self.assertFalse(help_window.winfo_exists())
             self.assertIsNone(self.root.grab_current())
-            self.assertEqual(self.app.current, target)
+            self.assertEqual(self.app.current, "Fabric")
             self.assertFalse(self.db.connection.in_transaction)
+        self.errors.assert_not_called()
+
+    def test_dialog_opens_at_first_listing_top_left(self):
+        self.root.deiconify()
+        self.root.update_idletasks()
+        listing = self.app.list
+        self.assertTrue(listing.winfo_ismapped())
+        self.app.open_filter()
+        window = self.app.dialogs[-1]
+        self.root.update()
+        self.assertEqual((window.winfo_rootx(), window.winfo_rooty()),
+                         (listing.winfo_rootx(), listing.winfo_rooty()))
+        self.assertEqual(set(window.nav.buttons), {"Screen Help"})
+        window.destroy()
         self.errors.assert_not_called()
 
     def test_help_editor_saves_multiline_text_updates_live_help_and_sorts(self):
@@ -1075,11 +1094,11 @@ class ScreenTests(unittest.TestCase):
         help_window = self.app.dialogs[-1]
         help_window.destroy()
         self.assertEqual(self.root.grab_current(), window)
+        self.assertEqual(set(window.nav.buttons), {"Screen Help"})
         self.confirm.return_value = True
-        window.nav.buttons["Setup"].invoke()
-        self.root.update()
+        window.destroy()
         self.assertFalse(window.winfo_exists())
-        self.assertEqual(self.app.error_form.values()["Description"], "")
+        self.assertEqual(self.app.error_form.values()["Description"], "Draft fix")
         self.assertIsNone(self.root.grab_current())
         self.errors.assert_not_called()
 

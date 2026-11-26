@@ -20,7 +20,7 @@ from .backs import (
 from .database import (
     ALL_DROPDOWN_ROWS, ALL_DROPDOWN_SCOPE, DROPDOWN_COLUMNS, DROPDOWN_FILTER_FIELDS,
     DROPDOWN_SCOPE_FIELDS, HELP_FILTER_FIELDS,
-    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, Database, MissingHelp,
+    HISTORY_FILTER_FIELDS, HISTORY_COLUMNS, SCHEMA_VERSION, Database, MissingHelp,
 )
 from .block_ui import BlockScreenMixin
 from .quilt_ui import QuiltScreenMixin
@@ -386,7 +386,16 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.button(actions, "Clear", self.clear)
         self.button(actions, "History", self.open_history)
         ttk.Label(self.setup_page, text="Setup/Utilities", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        ttk.Label(self.setup_page, text=f"Database: {self.db.path}", padding=(0, 8)).pack(anchor="w")
+        about = ttk.Frame(self.setup_page)
+        about.pack(fill="x")
+        ttk.Label(about, text=f"Database: {self.db.path}", padding=(0, 8)).pack(side="left", anchor="n")
+        ttk.Label(
+            about,
+            text=f"About Quilting Tools\nApplication version {VERSION}\n"
+                 f"Database schema {SCHEMA_VERSION} (upgrade path from v14)\n"
+                 "Measurements in inches; exact values are stored.",
+            justify="left", padding=(8, 8),
+        ).pack(side="right", anchor="n")
         utilities = ttk.Frame(self.setup_page)
         utilities.pack(fill="x", pady=8)
         self.button(utilities, "Backup Database", self.backup)
@@ -448,7 +457,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 self.missing_help_warned.add((screen, name))
             return text, text
 
-    def navigation(self, parent):
+    def navigation(self, parent, *, dialog=False):
         bar = ttk.Frame(parent, padding=(8, 4))
         bar.pack(fill="x", side="top")
         bar.title = ttk.Label(bar, text="", font=("TkDefaultFont", 14, "bold"))
@@ -456,7 +465,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         buttons = ttk.Frame(bar)
         buttons.pack(side="right")
         bar.buttons = {}
-        for label in NAVIGATION:
+        for label in (("Screen Help",) if dialog else NAVIGATION):
             action = (lambda parent=parent: self.screen_help(parent)) if label == "Screen Help" else (
                 lambda name=label: self.show_screen(name))
             bar.buttons[label] = self.button(buttons, label, action)
@@ -681,14 +690,46 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         window.title(title)
         window.transient(self.root)
         window.minsize(520, 200)
-        window.nav = self.navigation(window)
+        window.nav = self.navigation(window, dialog=True)
         self.dialogs.append(window)
         window.grab_set()
+        window.position_after_id = window.after_idle(lambda: self._position_dialog_idle(window))
         window.bind("<Destroy>", lambda event: self.dialog_closed(window) if event.widget == window else None)
         window.bind("<Escape>", lambda _: window.destroy())
         return window
 
+    def _position_dialog_idle(self, window):
+        window.position_after_id = None
+        self.position_dialog(window)
+
+    def position_dialog(self, window):
+        if not window.winfo_exists():
+            return
+        listing = next((widget for widget in self._descendants(self.screens[self.current])
+                        if isinstance(widget, RecordList)), None)
+        anchor = listing or self.screens[self.current]
+        if anchor.winfo_ismapped():
+            x, y = anchor.winfo_rootx(), anchor.winfo_rooty()
+        else:
+            x, y = self.root.winfo_rootx(), self.root.winfo_rooty()
+        window.update_idletasks()
+        x = max(0, min(x, window.winfo_screenwidth() - window.winfo_width()))
+        y = max(0, min(y, window.winfo_screenheight() - 120))
+        window.geometry(f"+{x}+{y}")
+
+    @staticmethod
+    def _descendants(parent):
+        for child in parent.winfo_children():
+            yield child
+            yield from Application._descendants(child)
+
     def dialog_closed(self, window):
+        if window.position_after_id is not None:
+            try:
+                window.after_cancel(window.position_after_id)
+            except tk.TclError:
+                pass
+            window.position_after_id = None
         self.dialogs.remove(window)
         self.dialog_forms.pop(window, None)
         self.dialog_dirty.pop(window, None)
