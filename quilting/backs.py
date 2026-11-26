@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from html import escape
 
-from .model import FieldError, display_fractional_measurement
+from .model import FieldError, display_fabric_name, display_fractional_measurement
 
 INCH = 1_000_000
 MINIMUM_PART = 5 * INCH
@@ -340,7 +340,8 @@ def escaped_legend(layout):
             "<tr><td>" + str(item["number"]) + "</td>"
             f'<td><span style="display:inline-block;width:1em;height:1em;background:{swatch};'
             'border:1px solid #444"></span> ' + escape(item["palette_color"]) + "</td>"
-            "<td>" + escape(item["fabric_name"]) + " — " + escape(item["inventory_color"]) + "</td>"
+            "<td>" + escape(display_fabric_name(item["fabric_name"], item["source_id"]))
+            + " — " + escape(item["inventory_color"]) + "</td>"
             f'<td>{escape(item["grain_axis"])}</td>'
             f'<td>{display_fractional_measurement(item["finished_width"])} × '
             f'{display_fractional_measurement(item["finished_length"])} in</td>'

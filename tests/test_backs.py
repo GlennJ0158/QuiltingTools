@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from quilting.backs import (
-    INCH, PALETTE, escaped_legend, generate_layouts, layout_svg, palette_suggestion, ratio_label,
+    INCH, PALETTE, escaped_legend, generate_layouts, layout_from_record, layout_svg, palette_suggestion, ratio_label,
 )
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.model import FieldError
@@ -54,6 +54,19 @@ class QuiltBackPlanningTests(unittest.TestCase):
         self.assertIn("~40 × 40 in", legend)
         self.assertIn("~40 1/16 × 40 in", legend)
         self.assertIn("~0, 0 in", legend)
+
+    def test_saved_back_legend_identifies_duplicate_names_and_escapes_html(self):
+        ids = [self.add_piece(FabricName="<Same & fabric>", UsableWidth="30", UsableLength="60")
+               for _ in range(2)]
+        pieces = [self.db.get_piece(piece_id) for piece_id in ids]
+        layout = generate_layouts(pieces, 50 * INCH, 50 * INCH, 0, 0)[0]
+        back_id = self.db.save_back_draft("Back", 50 * INCH, 50 * INCH, 0, 0, layout)
+        saved = self.db.get_quilt_back(back_id)
+        legend = escaped_legend(layout_from_record(saved))
+        for piece_id in ids:
+            self.assertIn(f"&lt;Same &amp; fabric&gt; ({piece_id})", legend)
+        self.assertNotIn("<Same & fabric>", legend)
+        self.assertTrue(all(panel["FabricName"] == "<Same & fabric>" for panel in saved["Panels"]))
 
     def test_separate_margins_are_saved_and_checked(self):
         source_id = self.add_piece(UsableWidth="100", UsableLength="100")

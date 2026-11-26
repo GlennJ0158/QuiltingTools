@@ -194,6 +194,8 @@ class BlockUITests(unittest.TestCase):
             form.variables["BlockPartChoice"].set(label)
             form.widgets["BlockPartChoice"].event_generate("<<ComboboxSelected>>")
             self.root.update()
+            self.assertEqual(listing.tree.set(str(piece_id), "FabricName"),
+                             f"{self.db.get_piece(piece_id)['FabricName']} ({piece_id})")
             listing.tree.selection_set(str(piece_id))
             self.click(window, "Assign Fabric to Part")
             self.assertEqual(listing.tree.set(str(piece_id), "Assigned"), "Yes")
@@ -403,7 +405,8 @@ class BlockUITests(unittest.TestCase):
         placements = self.db.block_placements(block_id)
         self.db.save_block_placement(block_id, 2, placements[1]["ID"], 5_000_000, 0, 0, False)
         self.db.approve_block(block_id, 3)
-        source_id = self.db.save_piece(fabric(Color="Red", UsableWidth="12", UsableLength="22"))
+        source_id = self.db.save_piece(fabric(FabricName="<Fabric & name>", Color="Red",
+                                               UsableWidth="12", UsableLength="22"))
         before = self.db.get_piece(source_id)
         self.app.show_screen("Quilt")
         self.app.quilt_name_form.variables["QuiltName"].set("Test Quilt")
@@ -417,6 +420,7 @@ class BlockUITests(unittest.TestCase):
         self.click(self.app.quilt_page, "Map Color")
         self.click(self.app.quilt_page, "Plan Quilt")
         self.assertIn("All required parts allocated", self.app.quilt_text.get("1.0", "end"))
+        self.assertIn(f"<Fabric & name> ({source_id})", self.app.quilt_text.get("1.0", "end"))
         path = Path(self.temp.name) / "quilt.html"
         with patch("quilting.quilt_ui.filedialog.asksaveasfilename", return_value=str(path)), \
                 patch("quilting.quilt_ui.webbrowser.open", return_value=True):
@@ -425,6 +429,8 @@ class BlockUITests(unittest.TestCase):
         self.assertIn("<polygon", report)
         self.assertIn("part instance 1", report)
         self.assertIn("Cutting list: Entire Quilt", report)
+        self.assertIn(f"<h2>Source &lt;Fabric &amp; name&gt; ({source_id})</h2>", report)
+        self.assertIn(f"from Fabric &lt;Fabric &amp; name&gt; ({source_id})", report)
         self.assertIn("4 Red Rectangle", report)
         self.app.quilt_report_format.set("By Block")
         path_by_block = Path(self.temp.name) / "quilt-by-block.html"
@@ -433,6 +439,7 @@ class BlockUITests(unittest.TestCase):
             self.click(self.app.quilt_page, "Print Quilt Plan")
         report = path_by_block.read_text()
         self.assertIn("Cutting list: By Block", report)
+        self.assertIn(f"from Fabric &lt;Fabric &amp; name&gt; ({source_id})", report)
         self.assertIn("quantity 2", report)
         self.assertIn("Panel (part ID", report)
         self.assertIn("<polygon", report)

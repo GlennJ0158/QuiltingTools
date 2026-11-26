@@ -24,6 +24,10 @@ def caption(name):
     return re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", name)
 
 
+def display_fabric_name(name, piece_id):
+    return f"{name} ({piece_id})"
+
+
 @dataclass(frozen=True)
 class Field:
     name: str

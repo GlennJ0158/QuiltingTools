@@ -255,9 +255,26 @@ class QuiltCuttingListTests(unittest.TestCase):
         self.assertEqual(report.count("36 Red Square"), 1)
         self.assertIn("finished width 2, length 2 in", report)
         self.assertIn("seam allowance 1/4 in; cut bounding size 2 1/2 x 2 1/2 in", report)
-        self.assertIn(f"18 from Fabric {self.fabric_a}: First / Red, 2 1/2 x 45 in", report)
-        self.assertIn(f"16 from Fabric {self.fabric_b}: Second / Red, 2 1/2 x 40 in", report)
+        self.assertIn(f"18 from Fabric First ({self.fabric_a}) / Red, 2 1/2 x 45 in", report)
+        self.assertIn(f"16 from Fabric Second ({self.fabric_b}) / Red, 2 1/2 x 40 in", report)
         self.assertIn("Missing: 2", report)
+
+    def test_duplicate_names_in_saved_plan_are_distinguished_in_both_cutting_formats(self):
+        for piece_id, length in ((self.fabric_a, "45"), (self.fabric_b, "40")):
+            self.db.save_piece(fabric(FabricName="Same fabric", Color="Red",
+                                      UsableWidth="2.5", UsableLength=length), piece_id, 1)
+        plan_id = self.db.create_quilt_plan(self.plan["QuiltID"], self.plan["QuiltRevision"])
+        self.db.save_piece(fabric(FabricName="Renamed", Color="Red",
+                                  UsableWidth="2.5", UsableLength="45"), self.fabric_a, 2)
+        plan = self.db.get_quilt_plan(plan_id)
+        data = plan["PlanData"]
+        before = json.dumps(data, sort_keys=True)
+        for report in (cutting_list_description(plan, "Entire Quilt"),
+                       cutting_list_description(plan, "By Block"),
+                       QuiltScreenMixin.quilt_plan_description(plan)):
+            self.assertIn(f"Same fabric ({self.fabric_a})", report)
+            self.assertIn(f"Same fabric ({self.fabric_b})", report)
+        self.assertEqual(json.dumps(data, sort_keys=True), before)
 
     def test_rounding_plan_output_does_not_change_snapshot_or_claim_fit(self):
         data = self.plan["PlanData"]

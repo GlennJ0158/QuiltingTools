@@ -104,6 +104,33 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.get_piece(piece_id)["UsableLength"], 64_123_456)
         self.errors.assert_not_called()
 
+    def test_inventory_lists_and_history_identify_duplicate_fabric_names(self):
+        name = "Same fabric " * 7
+        name = name.strip()
+        ids = [self.add_piece(FabricName=name) for _ in range(2)]
+        for piece_id in ids:
+            self.assertEqual(self.app.list.tree.set(str(piece_id), "FabricName"), f"{name} ({piece_id})")
+            self.assertEqual(self.db.get_piece(piece_id)["FabricName"], name)
+        font = tkfont.nametofont("TkDefaultFont")
+        self.root.deiconify()
+        self.root.update()
+        self.assertGreaterEqual(self.app.list.tree.column("FabricName", "width"),
+                                font.measure(f"{name} ({ids[-1]})"))
+        self.assertEqual(self.app.form.values()["FabricName"], name)
+        self.app.open_history()
+        window = self.app.dialogs[-1]
+        self.assertIn(f"{name} ({ids[-1]})", window.title())
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        listing.tree.selection_set(listing.tree.get_children()[0])
+        self.root.update()
+        text = next(child for child in window.winfo_children() if isinstance(child, tk.Text))
+        self.assertIn(f"Fabric Name: {name} ({ids[-1]})", text.get("1.0", "end"))
+        window.destroy()
+        self.app.show_screen("Quilt Backs")
+        for piece_id in ids:
+            self.assertEqual(self.app.back_stock.tree.set(str(piece_id), "FabricName"),
+                             f"{name} ({piece_id})")
+
     def test_binding_audit_detects_unassigned_and_misassigned_controls(self):
         for field in FABRIC_FIELDS:
             widget = self.app.form.widgets[field.name]
@@ -1335,7 +1362,7 @@ class ScreenTests(unittest.TestCase):
     def test_quilt_back_plan_preview_cut_confirmation_and_inventory_adjustment(self):
         source_ids = [
             self.db.save_piece(fabric(
-                FabricName=f"Red backing {index}", Color="Red", UsableWidth="42",
+                FabricName="Red backing", Color="Red", UsableWidth="42",
                 UsableLength="60", GrainDirection="Along Width",
             ))
             for index in range(2)
@@ -1352,6 +1379,8 @@ class ScreenTests(unittest.TestCase):
         self.app.back_stock.tree.selection_set(str(source_ids[0]))
         self.app.set_back_palette()
         palette = self.app.dialogs[-1]
+        self.assertTrue(any(f"Red backing ({source_ids[0]})" in widget.cget("text")
+                            for widget in descendants(palette) if isinstance(widget, ttk.Label)))
         for widget in descendants(palette):
             if isinstance(widget, (ttk.Button, ttk.Combobox)):
                 self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
@@ -1364,6 +1393,10 @@ class ScreenTests(unittest.TestCase):
         self.app.preview_back()
         preview = self.dialog()
         self.assertTrue(any(isinstance(widget, tk.Canvas) for widget in descendants(preview)))
+        preview_text = " ".join(widget.cget("text") for widget in descendants(preview)
+                                if isinstance(widget, ttk.Label))
+        for piece_id in source_ids:
+            self.assertIn(f"Red backing ({piece_id})", preview_text)
         for widget in descendants(preview):
             if isinstance(widget, ttk.Button):
                 self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
@@ -1380,10 +1413,16 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("<svg", report)
         self.assertIn("Inventory fabric", report)
         self.assertIn("Teal", report)
+        for piece_id in source_ids:
+            self.assertIn(f"Red backing ({piece_id})", report)
         self.assertIn("verify rounded cuts fit without overlap", report)
         self.assertIn("check allocations before cutting", report)
         self.app.open_back_cut()
         dialog_window = next(iter(self.app.dialog_forms))
+        cut_text = " ".join(widget.cget("text") for widget in descendants(dialog_window)
+                            if isinstance(widget, ttk.Label))
+        for piece_id in source_ids:
+            self.assertIn(f"Red backing ({piece_id})", cut_text)
         self.assertTrue(any("verify rounded cuts fit without overlap" in widget.cget("text")
                             for widget in descendants(dialog_window) if isinstance(widget, ttk.Label)))
         form = self.app.dialog_forms[dialog_window][0]
