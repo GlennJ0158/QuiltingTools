@@ -1,6 +1,8 @@
 import json
+import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -297,6 +299,45 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual({row["ID"] for row in self.db.pieces(filters)}, set(ids[1:4]))
         filters.update(MinimumWidth="20", MaximumWidth="10")
         self.assertEqual(self.db.pieces(filters), [])
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "Changing the local timezone requires tzset")
+    def test_modified_date_filter_uses_local_inclusive_boundaries_and_existing_filters(self):
+        ids = [self.db.save_piece(fabric(FabricName=name, Color=color))
+               for name, color in (("A", "Blue"), ("B", "Blue"), ("C", "Red"),
+                                   ("D", "Blue"), ("E", "Blue"))]
+        stamps = ("2024-07-01T04:00:59.999999+00:00", "2024-07-01T04:01:00.000000+00:00",
+                  "2024-07-02T03:59:59.999999+00:00", "2024-07-02T04:01:00.000000+00:00",
+                  "2024-07-02T04:01:00.000001+00:00")
+        with self.db.connection:
+            self.db.connection.executemany("UPDATE FabricPiece SET DateModified=? WHERE ID=?",
+                                           zip(stamps, ids))
+        try:
+            with patch.dict(os.environ, {"TZ": "America/New_York"}):
+                time.tzset()
+                filters = {field.name: "" for field in FILTER_FIELDS}
+                filters["AfterDateModified"] = "07/01/2024"
+                self.assertEqual([row["ID"] for row in self.db.pieces(filters)], ids[1:])
+                filters["BeforeDateModified"] = "07/02/2024"
+                self.assertEqual([row["ID"] for row in self.db.pieces(filters)], ids[1:4])
+                filters["AfterDateModified"] = ""
+                self.assertEqual([row["ID"] for row in self.db.pieces(filters)], ids[:4])
+                filters["Color"] = "Blue"
+                self.assertEqual([row["ID"] for row in self.db.pieces(
+                    filters, selected_ids=[ids[1], ids[2], ids[3]], sort=[("ID", "desc")])],
+                    [ids[3], ids[1]])
+                filters.update(AfterDateModified="07/03/2024", BeforeDateModified="07/02/2024")
+                self.assertEqual(self.db.pieces(filters), [])
+        finally:
+            time.tzset()
+
+    def test_modified_date_filter_rejects_invalid_dates(self):
+        filters = {field.name: "" for field in FILTER_FIELDS}
+        for field in ("AfterDateModified", "BeforeDateModified"):
+            for value in ("2/01/2024", "02/30/2024", "2024-02-01", "02/29/2023", "00/01/2024"):
+                with self.subTest(field=field, value=value), self.assertRaises(FieldError) as raised:
+                    self.db.pieces({**filters, field: value})
+                self.assertEqual(raised.exception.field, field)
+                self.assertIn("mm/dd/yyyy", self.db.error_message(raised.exception))
 
     def test_selection_snapshot_and_sort_persistence(self):
         first = self.db.save_piece(fabric())

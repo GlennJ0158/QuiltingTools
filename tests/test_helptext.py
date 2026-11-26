@@ -80,6 +80,27 @@ class HelpTextTests(unittest.TestCase):
         self.assertEqual(self.db.help_pair("QuiltBlock", "Button:Create"),
                          default_help()["QuiltBlock", "Button:Create"])
 
+    def test_filter_help_updates_old_default_but_preserves_custom_text(self):
+        hover, full = default_help()["Filter", "ScreenHelp"]
+        previous = ("Text filters match text anywhere in the field, ignoring case. Minimum dimensions are "
+                    "inclusive inches and respect the rectangle's recorded orientation. Blank means no "
+                    "restriction. Apply validates and applies the criteria; Cancel leaves the list unchanged.")
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE HelpText SET FullText=? WHERE TableName='Filter' AND FieldName='ScreenHelp'",
+                (previous,))
+        self.db.close()
+        self.db = Database(self.path)
+        self.assertEqual(self.db.help_pair("Filter", "ScreenHelp"), (hover, full))
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE HelpText SET FullText='Custom filter help' WHERE TableName='Filter' AND FieldName='ScreenHelp'")
+        self.db.close()
+        self.db = Database(self.path)
+        self.assertEqual(self.db.help_pair("Filter", "ScreenHelp"), (hover, "Custom filter help"))
+        for field in ("AfterDateModified", "BeforeDateModified"):
+            self.assertIn("00:01 local time", self.db.help_pair("Filter", field)[1])
+
     def test_help_sort_is_validated_and_persists_independently(self):
         self.db.save_sort((("UsableWidth", "desc"),))
         self.db.save_sort((("HoverText", "desc"),), "HelpTextSort")

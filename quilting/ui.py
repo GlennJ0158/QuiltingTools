@@ -951,7 +951,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             allow_blank_choices=() if errors else ("Color",),
         )
         if not errors:
-            for minimum, maximum in (("MinimumWidth", "MaximumWidth"), ("MinimumLength", "MaximumLength")):
+            for minimum, maximum in (("MinimumWidth", "MaximumWidth"), ("MinimumLength", "MaximumLength"),
+                                     ("AfterDateModified", "BeforeDateModified")):
                 row = form.labels[minimum].grid_info()["row"]
                 form.labels[maximum].grid_configure(row=row, column=2)
                 form.widgets[maximum].grid_configure(row=row, column=3)

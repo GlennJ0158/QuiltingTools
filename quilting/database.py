@@ -24,7 +24,8 @@ from .errors import (
 )
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
-    SORT_FIELDS, Field, FieldError, caption, display_measurement, measurement, normalize_sort, validate_fields,
+    SORT_FIELDS, Field, FieldError, caption, display_measurement, measurement, modified_date_boundary,
+    normalize_sort, validate_fields,
 )
 
 APPLICATION_ID = 0x5155494C
@@ -396,6 +397,7 @@ class Database:
             self.validate(self.connection)
             with self.connection:
                 self._seed_help()
+                self._update_fabric_filter_help()
                 self._update_conflict_reference()
         except (sqlite3.Error, OSError, FieldError):
             self.connection.close()
@@ -764,6 +766,19 @@ class Database:
             "INSERT INTO HelpText (TableName, FieldName, HoverText, FullText) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(TableName, FieldName) DO NOTHING",
             ((screen, name, *pair) for (screen, name), pair in default_help().items()),
+        )
+
+    def _update_fabric_filter_help(self):
+        hover, full = default_help()["Filter", "ScreenHelp"]
+        previous = full.replace(
+            "inclusive inches and respect the rectangle's recorded orientation. Modification date bounds "
+            "use mm/dd/yyyy at 00:01 local time and include the boundary. Date Modified changes on "
+            "any saved modification, not only use. Blank means no ",
+            "inclusive inches and respect the rectangle's recorded orientation. Blank means no ",
+        )
+        self.connection.execute(
+            "UPDATE HelpText SET FullText=? WHERE TableName='Filter' AND FieldName='ScreenHelp' "
+            "AND HoverText=? AND FullText=?", (full, hover, previous),
         )
 
     def _upgrade_margin_help(self):
@@ -1316,6 +1331,10 @@ class Database:
                 and error.details.get("reason") == "range_order"):
             return ("Minimum Color Value: The minimum cannot exceed the maximum.\n\n"
                     "Choose an ordered range from 1 to 10, or leave both values blank.\n\n"
+                    f"Error ID: {row['ErrorTextID']}")
+        if error.key == "Choice" and error.details.get("reason") == "date_format":
+            return (f"{caption(error.field)}: Enter a valid local date in mm/dd/yyyy format. "
+                    "The assumed local time is 00:01.\n\n"
                     f"Error ID: {row['ErrorTextID']}")
         text = f"{caption(error.field)}: {row['MessageTemplate'].format(**error.details)}"
         if row["ResolutionText"]:
@@ -2061,6 +2080,21 @@ class Database:
         rows = [dict(row) for row in self.connection.execute(
             f"SELECT * FROM FabricPiece{where} ORDER BY {order_sql}", args,
         )]
+        after = (modified_date_boundary(clean["AfterDateModified"], "AfterDateModified")
+                 if clean["AfterDateModified"] else None)
+        before = (modified_date_boundary(clean["BeforeDateModified"], "BeforeDateModified")
+                  if clean["BeforeDateModified"] else None)
+        if after is not None or before is not None:
+            filtered = []
+            for row in rows:
+                try:
+                    modified = datetime.fromisoformat(row["DateModified"]).astimezone(timezone.utc)
+                except (ValueError, TypeError, OverflowError, OSError) as error:
+                    raise FieldError("DatabaseFormat", "DateModified",
+                                     detail=f"Invalid modification timestamp for fabric {row['ID']}.") from error
+                if (after is None or modified >= after) and (before is None or modified <= before):
+                    filtered.append(row)
+            rows = filtered
         if selected_ids is not None:
             allowed = set(selected_ids)
             rows = [row for row in rows if row["ID"] in allowed]
