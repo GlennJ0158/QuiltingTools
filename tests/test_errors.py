@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
-from quilting.errors import ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES
+from quilting.errors import ERROR_FIELDS, ERROR_FILTER_FIELDS, OLD_CONFLICT_REFERENCE, STARTUP_MESSAGES, TROUBLESHOOTING
 from quilting.model import FieldError
 from tests.test_inventory import assert_legacy_rows_preserved, downgrade_dropdown_schema, fabric
 
@@ -78,6 +78,27 @@ class ErrorMessageTests(unittest.TestCase):
             self.assertEqual(copy.load_sort("ErrorMessageSort"), self.db.load_sort("ErrorMessageSort"))
         finally:
             copy.close()
+
+    def test_existing_default_conflict_reference_is_updated_but_edits_are_preserved(self):
+        conflict = self.db.connection.execute(
+            "SELECT ErrorTextID FROM ErrorText WHERE MessageKey = 'Conflict'").fetchone()[0]
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE ErrorMessage SET LikelyCause = ?, Description = ? WHERE ID = ?",
+                (*OLD_CONFLICT_REFERENCE, conflict))
+        self.db.close()
+        self.db = Database(self.path)
+        row = self.db.get_error(conflict)
+        self.assertEqual((row["LikelyCause"], row["Description"]), TROUBLESHOOTING["Conflict"])
+        with self.db.connection:
+            self.db.connection.execute(
+                "UPDATE ErrorMessage SET LikelyCause = ?, Description = ? WHERE ID = ?",
+                (OLD_CONFLICT_REFERENCE[0], "My customized instructions", conflict))
+        self.db.close()
+        self.db = Database(self.path)
+        row = self.db.get_error(conflict)
+        self.assertEqual(row["LikelyCause"], OLD_CONFLICT_REFERENCE[0])
+        self.assertEqual(row["Description"], "My customized instructions")
 
     def test_required_limits_binding_missing_and_stale_changes_are_rejected(self):
         for field in ERROR_FIELDS:

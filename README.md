@@ -203,6 +203,12 @@ first plan using a source can be confirmed without regeneration.
 Open **QuiltBlock** to add a named draft with finished width and length, scale
 percentage (100 by default), and seam allowance (1/4 inch per edge by default).
 Scale applies to the finished design and placement coordinates, not seam allowance.
+Scale is displayed as a percentage without scientific notation. Existing scale
+limits are unchanged. Approved blocks cannot be edited; select one and choose
+**New Version** to make an editable draft. If a draft changed since it was loaded,
+copy unsaved edits elsewhere, choose **Refresh**, confirm discarding them, select
+the block again, and re-enter the edits before choosing **Update**. Selecting the
+already-highlighted row does not reload it.
 Add part definitions through **Parts**: rectangle, square, right triangle,
 isosceles triangle, circle or semicircle. Enter finished measurements and a
 count per block. Squares require equal sides. For triangles, side `a` is the

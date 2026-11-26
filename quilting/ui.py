@@ -256,11 +256,13 @@ class Form(ttk.Frame):
 
 
 class RecordList(ttk.Frame):
-    def __init__(self, parent, columns, measurement_display=display_measurement, name_limit=None):
+    def __init__(self, parent, columns, measurement_display=display_measurement, name_limit=None,
+                 formatters=None):
         super().__init__(parent, padding=(8, 0, 8, 8))
         self.columns = columns
         self.measurement_display = measurement_display
         self.name_limit = name_limit
+        self.formatters = formatters or {}
         self.heading = ttk.Label(self, text="", wraplength=1100)
         self.heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 3))
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
@@ -305,7 +307,8 @@ class RecordList(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             values = [
-                self.measurement_display(row[name]) if name in (
+                self.formatters[name](row[name]) if name in self.formatters
+                else self.measurement_display(row[name]) if name in (
                     "UsableWidth", "UsableLength", "BackWidth", "BackLength", "FinishedWidth", "FinishedLength",
                 )
                 else display_timestamp(row[name]) if name in ("DateCreated", "DateModified")

@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from tkinter import ttk
+from tkinter import font as tkfont
 from unittest.mock import patch
 
 from quilting.database import Database
@@ -101,6 +102,95 @@ class BlockUITests(unittest.TestCase):
         self.assertEqual(saved["FinishedLength"], 10_000_000)
         self.assertEqual(self.app.block_list.tree.selection(), (str(self.app.block_id),))
         self.errors.assert_not_called()
+
+    def test_scale_displays_plain_percentage_without_changing_values_or_range(self):
+        scales = ("1", "100", "500", "500.25", "10000", "0.1", "123.123456789012345")
+        ids = [self.db.add_block(block(BlockName=f"Scale {scale}", Scale=scale)) for scale in scales]
+        self.app.refresh_blocks()
+        self.assertEqual(self.app.block_list.tree.heading("Scale")["text"], "Scale (%)")
+        for block_id, scale in zip(ids, scales):
+            with self.subTest(scale=scale):
+                self.assertEqual(self.app.block_list.tree.set(str(block_id), "Scale"), f"{scale}%")
+                self.app.block_list.tree.selection_set(str(block_id))
+                self.root.update()
+                self.assertEqual(self.app.block_form.variables["Scale"].get(), scale)
+        self.assertEqual(self.app.block_form.labels["Scale"].cget("text"), "Scale (%)")
+        self.assertGreaterEqual(
+            self.app.block_list.tree.column("Scale", "width"),
+            tkfont.nametofont("TkDefaultFont").measure("123.123456789012345%"),
+        )
+        self.assertEqual([row["ID"] for row in self.db.blocks(sort=(("Scale", "asc"),))],
+                         [ids[i] for i in (5, 0, 1, 6, 2, 3, 4)])
+        self.errors.assert_not_called()
+
+    def test_stale_block_error_gives_refresh_steps_and_preserves_unsaved_input(self):
+        block_id = self.db.add_block(block())
+        self.app.refresh_blocks(block_id)
+        other = Database(self.db.path)
+        try:
+            other.update_block(block_id, 1, block(BlockName="Changed elsewhere"))
+        finally:
+            other.close()
+        self.app.block_form.variables["Description"].set("Unsaved work")
+        self.click(self.app.block_page, "Update")
+        message = self.errors.call_args.args[1]
+        self.assertIn("Error ID: 7", message)
+        self.assertIn("choose Refresh", message)
+        self.assertIn("Select the block again", message)
+        self.assertEqual(self.app.block_form.variables["Description"].get(), "Unsaved work")
+        self.assertEqual(self.db.get_block(block_id)["BlockName"], "Changed elsewhere")
+        self.click(self.app.block_page, "Refresh")
+        self.app.block_list.tree.selection_set(str(block_id))
+        self.root.update()
+        self.app.block_form.variables["Description"].set("Re-entered")
+        self.click(self.app.block_page, "Update")
+        self.assertEqual(self.db.get_block(block_id)["Description"], "Re-entered")
+
+    def test_approved_block_error_explains_new_version(self):
+        block_id = self.db.create_block_template("Flying Geese", block())
+        self.db.approve_block(block_id, 1)
+        self.app.refresh_blocks(block_id)
+        self.app.block_form.variables["Description"].set("Requested edit")
+        self.click(self.app.block_page, "Update")
+        message = self.errors.call_args.args[1]
+        self.assertIn("Error ID: 7", message)
+        self.assertIn("Approved", message)
+        self.assertIn("New Version", message)
+        self.assertEqual(self.app.block_form.variables["Description"].get(), "Requested edit")
+        self.click(self.app.block_page, "New Version")
+        self.assertNotEqual(self.app.block_id, block_id)
+        self.assertEqual(self.db.get_block(self.app.block_id)["Status"], "Draft")
+        self.app.block_form.variables["Description"].set("New draft edit")
+        self.click(self.app.block_page, "Update")
+        self.assertEqual(self.db.get_block(self.app.block_id)["Description"], "New draft edit")
+
+    def test_opening_parts_does_not_replace_loaded_revision_after_external_change(self):
+        block_id = self.db.add_block(block())
+        self.app.refresh_blocks(block_id)
+        other = Database(self.db.path)
+        try:
+            other.update_block(block_id, 1, block(BlockName="Changed elsewhere"))
+        finally:
+            other.close()
+        self.click(self.app.block_page, "Parts")
+        window = self.app.dialogs[-1]
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        form.assign(part())
+        self.click(window, "Add")
+        self.assertIn("choose Refresh", self.errors.call_args.args[1])
+        self.assertEqual(self.db.block_parts(block_id), [])
+        self.assertEqual(form.variables["PartName"].get(), part()["PartName"])
+        self.assertEqual(self.db.get_block(block_id)["BlockName"], "Changed elsewhere")
+
+    def test_approve_with_unsaved_block_details_explains_how_to_proceed(self):
+        block_id = self.db.create_block_template("Flying Geese", block())
+        self.app.refresh_blocks(block_id)
+        self.app.block_form.variables["Description"].set("Unsaved")
+        self.click(self.app.block_page, "Approve")
+        message = self.errors.call_args.args[1]
+        self.assertIn("unsaved details", message)
+        self.assertIn("Choose Update", message)
+        self.assertEqual(self.db.get_block(block_id)["Status"], "Draft")
 
     def test_print_sketch_escapes_text_and_includes_cut_outlines(self):
         block_id = self.db.add_block(block(BlockName="<Block>"))

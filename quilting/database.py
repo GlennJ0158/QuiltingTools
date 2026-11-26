@@ -18,7 +18,10 @@ from .helptext import (
     HISTORY_COLUMNS, HISTORY_FILTER_FIELDS, SYSTEM_DROPDOWNS, DROPDOWN_LIST_FIELDS,
     PROTECTED_LIST_HELP, DYNAMIC_LIST_HELP, default_help,
 )
-from .errors import ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, STARTUP_MESSAGES, TROUBLESHOOTING
+from .errors import (
+    BLOCK_CONFLICT_MESSAGES, ERROR_COLUMNS, ERROR_FIELDS, ERROR_FILTER_FIELDS, OLD_CONFLICT_REFERENCE,
+    STARTUP_MESSAGES, TROUBLESHOOTING,
+)
 from .model import (
     ADD_ITEM, DEFAULT_SORT, DROPDOWN_FIELDS, FABRIC_FIELDS, FABRIC_NAMES, FILTER_FIELDS, MESSAGES,
     SORT_FIELDS, Field, FieldError, caption, measurement, normalize_sort, validate_fields,
@@ -375,6 +378,7 @@ class Database:
             self.validate(self.connection)
             with self.connection:
                 self._seed_help()
+                self._update_conflict_reference()
         except (sqlite3.Error, OSError, FieldError):
             self.connection.close()
             raise
@@ -741,6 +745,15 @@ class Database:
         self.connection.executemany(
             "INSERT INTO ErrorMessage (ErrorText, LikelyCause, Description) VALUES (?, ?, ?)",
             STARTUP_MESSAGES,
+        )
+
+    def _update_conflict_reference(self):
+        self.connection.execute(
+            "UPDATE ErrorMessage SET LikelyCause = ?, Description = ? "
+            "WHERE ID = (SELECT ErrorTextID FROM ErrorText WHERE MessageKey = 'Conflict') "
+            "AND ErrorText = (SELECT MessageTemplate FROM ErrorText WHERE MessageKey = 'Conflict') "
+            "AND LikelyCause = ? AND Description = ?",
+            (*TROUBLESHOOTING["Conflict"], *OLD_CONFLICT_REFERENCE),
         )
 
     def error_rows(self, filters=None, selected_ids=None, sort=None):
@@ -1209,6 +1222,9 @@ class Database:
         ).fetchone()
         if row is None:
             raise FieldError("DatabaseFormat", "ErrorText", detail=f"Missing error message {error.key}.")
+        if error.key == "Conflict" and error.field == "QuiltBlock" and "reason" in error.details:
+            message, resolution = BLOCK_CONFLICT_MESSAGES[error.details["reason"]]
+            return f"{caption(error.field)}: {message}\n\n{resolution}\n\nError ID: {row['ErrorTextID']}"
         text = f"{caption(error.field)}: {row['MessageTemplate'].format(**error.details)}"
         if row["ResolutionText"]:
             text += f"\n\n{row['ResolutionText']}"
@@ -1255,8 +1271,10 @@ class Database:
 
     def _block_draft(self, block_id, revision):
         row = self.get_block(block_id)
-        if row["Status"] != "Draft" or row["Revision"] != revision:
-            raise FieldError("Conflict", "QuiltBlock")
+        if row["Status"] != "Draft":
+            raise FieldError("Conflict", "QuiltBlock", reason="approved")
+        if row["Revision"] != revision:
+            raise FieldError("Conflict", "QuiltBlock", reason="stale")
         return row
 
     @contextmanager
