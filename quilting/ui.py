@@ -424,7 +424,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         ttk.Label(
             about,
             text=f"About Quilting Tools\nApplication version {VERSION}\n"
-                 f"Database schema {SCHEMA_VERSION} (upgrade path from v14)\n"
+                 f"Database schema {SCHEMA_VERSION} (oldest supported)\n"
                  "Measurements in inches; exact values are stored.",
             justify="left", padding=(8, 8),
         ).pack(side="right", anchor="n")

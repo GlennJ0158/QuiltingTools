@@ -577,8 +577,7 @@ class ScreenTests(unittest.TestCase):
         about = next(widget for widget in descendants(self.app.setup_page)
                      if isinstance(widget, ttk.Label) and "About Quilting Tools" in widget.cget("text"))
         self.assertIn("Application version 0.5.0", about.cget("text"))
-        self.assertIn(f"Database schema {SCHEMA_VERSION}", about.cget("text"))
-        self.assertIn("upgrade path from v14", about.cget("text"))
+        self.assertIn(f"Database schema {SCHEMA_VERSION} (oldest supported)", about.cget("text"))
         self.app.form.variables["Notes"].set("Unsaved fabric note")
         self.confirm.return_value = False
         self.app.nav.buttons["Setup"].invoke()
