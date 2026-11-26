@@ -19,11 +19,11 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. The maintained upgrade path starts at database schema version 14
-and proceeds through the current schema; earlier legacy conversion routes may
-still be present but are outside the active compatibility plan. Upgrades add
-optional fabric color values and block-part ranges and later database features; declining leaves the
-database unchanged. Close all other copies of the application before accepting.
+automatically. Schema version 16 is the current development baseline. Upgrade
+code for older versions remains in place for now; the application is not yet
+deployed. Upgrades add optional fabric color values and block-part ranges and
+later database features; declining leaves the database unchanged. Close all
+other copies of the application before accepting.
 A verified `PreUpgrade_*` database is kept
 beside the original. Existing inventory, history, IDs, selections and sort order
 are preserved, and existing fabric descriptions seed the new lists. Failed
@@ -466,6 +466,15 @@ calculations into quilting.
 ## Development
 
 Install dependencies from `requirements.txt` into the active environment before testing.
+
+### Schema migrations
+
+Keep fresh-database creation separate from upgrade migrations. For future schema
+versions, isolate each version-to-version migration from legacy upgrade logic
+rather than extending a shared chain of version-specific conditions. When schemas
+below version 16 are no longer in scope, raise the minimum upgrade version and
+remove those legacy migrations and their fixtures/tests without changing newer
+migrations.
 
 ```sh
 python -m unittest discover -v
