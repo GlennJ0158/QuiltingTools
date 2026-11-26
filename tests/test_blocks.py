@@ -211,7 +211,7 @@ class BlockTests(unittest.TestCase):
 
     def test_upgrade_v6_requires_consent_and_retains_backup(self):
         with self.db.connection:
-            for name in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for name in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {name}")
             downgrade_dropdown_schema(self.db.connection)
@@ -233,7 +233,7 @@ class BlockTests(unittest.TestCase):
         row = next(row for row in self.db.dropdown_rows("Color") if row["ListItem"] == "Blue")
         set_id = self.db.save_set("Fabric colors", [row["ID"]], "DropDown", ("FabricPiece", "Color"))
         with self.db.connection:
-            for name in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for name in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                          "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {name}")
             self.db.connection.execute("ALTER TABLE Dropdown RENAME TO DropdownCurrent")

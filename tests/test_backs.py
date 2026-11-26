@@ -256,7 +256,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
     def test_version_five_upgrade_adds_back_tables_and_keeps_a_verified_backup(self):
         self.add_piece(FabricName="Legacy")
         with self.db.connection:
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
@@ -285,7 +285,7 @@ class QuiltBackPlanningTests(unittest.TestCase):
         set_id = self.db.save_set("Existing help", [help_id], "HelpText")
         connection = self.db.connection
         with connection:
-            for table in ("QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
+            for table in ("QuiltPartFabric", "QuiltPlan", "QuiltColorMap", "QuiltBlockUse", "Quilt",
                           "BlockSetMember", "BlockSet", "BlockPartPlacement", "BlockPart", "QuiltBlock"):
                 connection.execute(f"DROP TABLE {table}")
             connection.execute("ALTER TABLE WorkingListMember RENAME TO NewMember")

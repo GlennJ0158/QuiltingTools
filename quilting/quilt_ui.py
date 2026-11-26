@@ -5,7 +5,6 @@ from html import escape
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .blocks import COLORS
 from .model import Field, FieldError, display_fractional_measurement
 from .quilt_planner import matches_color_value
 from .quilt_report import cutting_list_description
@@ -32,10 +31,14 @@ class QuiltScreenMixin:
         self.quilt_status.pack(side="left")
         self.quilt_form = Form(entry, (
             Field("ApprovedBlock", "choice"), Field("Quantity", default="1"),
-            Field("PartColor", "choice", choices=COLORS),
+            Field("PartColor", "choice"),
             Field("InventoryColor", "choice")), columns=2, style="Entry.TFrame",
             database=self.db, dropdown_scope="Quilt")
         self.quilt_form.pack(fill="x")
+        ttk.Label(entry, text="1. Add each approved block and quantity.  2. Choose a used part color and "
+                  "inventory color, then Map Color; repeat for each color.  3. Choose a block and "
+                  "Eligible Fabrics to assign pieces to its parts.  4. Plan Quilt.",
+                  wraplength=1100, style="Entry.TLabel").pack(anchor="w", padx=4)
         actions = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         actions.pack(fill="x")
         for label, action in (("Set Block Quantity", self.set_quilt_block),
@@ -120,10 +123,22 @@ class QuiltScreenMixin:
         self.quilt_status.configure(text=f"Revision {row['Revision']}")
         uses = self.db.quilt_uses(quilt_id)
         mappings = self.db.quilt_mappings(quilt_id)
+        parts = [part for use in uses for part in self.db.block_parts(use["ID"])]
+        colors = tuple(sorted({part["PartColor"] for part in parts}))
+        self.quilt_form.widgets["PartColor"].configure(values=colors)
+        if self.quilt_form.variables["PartColor"].get() not in colors:
+            self.quilt_form.variables["PartColor"].set("")
+            self.quilt_initial["PartColor"] = ""
+        assigned = self.db.quilt_part_fabrics(quilt_id)
+        unmapped = sorted(set(colors) - {mapping["PartColor"] for mapping in mappings})
+        unassigned = [f"{part['PartName']} (ID {part['ID']})" for part in parts if part["ID"] not in assigned]
         self.quilt_summary.configure(text="Blocks: " + (", ".join(
             f"{r['BlockName']} (ID {r['ID']}): {r['Quantity']}" for r in uses) or "none")
             + "\nColor mappings: " + (", ".join(
-                f"{r['PartColor']} -> {r['InventoryColor']}" for r in mappings) or "none"))
+                f"{r['PartColor']} -> {r['InventoryColor']}" for r in mappings) or "none")
+            + "\nUnmapped colors: " + (", ".join(unmapped) or "none")
+            + "\nParts without fabric assignments (any matching fabric may be used): "
+            + (", ".join(unassigned) or "none"))
         self.quilt_plan_choices = {
             f"Plan {plan['ID']} / quilt revision {plan['QuiltRevision']} / {plan['DateCreated']}": plan["ID"]
             for plan in self.db.quilt_plans(quilt_id)}
@@ -166,6 +181,8 @@ class QuiltScreenMixin:
     def map_quilt_color(self):
         quilt_id = self.require_quilt()
         values = self.quilt_form.values()
+        if values["PartColor"] not in self.quilt_form.widgets["PartColor"].cget("values"):
+            raise FieldError("Choice", "PartColor")
         self.db.add_quilt_mapping(quilt_id, self.quilt_revision, values["PartColor"], values["InventoryColor"])
         self.after_quilt_change(("PartColor", "InventoryColor"))
 
@@ -178,25 +195,98 @@ class QuiltScreenMixin:
     def show_eligible_fabrics(self):
         from .ui import Form, RecordList
 
+        quilt_id = self.require_quilt()
         block_id = self.chosen_quilt_block()
+        if block_id not in {use["ID"] for use in self.db.quilt_uses(quilt_id)}:
+            raise FieldError("Database", "ApprovedBlock",
+                             detail="Add this block to the quilt with Set Block Quantity first.")
+        self.quilt_initial["ApprovedBlock"] = self.quilt_form.values()["ApprovedBlock"]
+        revision = self.quilt_revision
         parts = self.db.block_parts(block_id)
-        choices = {f"{part['PartName']} (ID {part['ID']}; {part['PartColor']})": part for part in parts}
+        block = self.db.get_block(block_id)
+        choices = {f"{block['BlockName']} / {part['PartName']} (part ID {part['ID']}; "
+                   f"{part['PartColor']}; value "
+                   f"{str(part['MinimumColorValue']) + '-' + str(part['MaximumColorValue']) if part['MinimumColorValue'] is not None else 'any'})": part
+                   for part in parts}
+        original = {key: set(ids) for key, ids in self.db.quilt_part_fabrics(quilt_id, block_id).items()}
+        assigned = {key: set(ids) for key, ids in original.items()}
         window = self.dialog("Eligible Fabrics", "Eligible Fabrics")
-        window.geometry("1000x500")
-        ttk.Label(window, text="Choose a part. The list shows available pieces matching its color value "
-                  "range in the Fabric working selection. Map the part color to inventory colors on "
-                  "the Quilt screen; size and mappings are also checked when planning.",
+        self.dialog_dirty[window] = lambda: assigned != original
+        window.geometry("1100x650")
+        ttk.Label(window, text="Choose a part. Highlight one or more eligible pieces and choose Assign "
+                  "Fabric to Part; repeat for each part. Highlight assigned pieces and choose Remove "
+                  "Assignment to remove them. Save Selection and Return saves all changes; Cancel discards them. "
+                  "No assignment means any matching fabric may be used. Assignments restrict, but do not "
+                  "replace, quilt-wide color mappings. Planning also checks fit and availability; it does not reserve fabric.",
                   wraplength=950, padding=8).pack(anchor="w")
-        form = Form(window, (Field("BlockPartChoice", "choice", choices=tuple(choices)),), columns=1)
+        form = Form(window, (Field("BlockPartChoice", "choice", choices=tuple(choices), width=85),), columns=1)
         form.pack(fill="x")
-        listing = RecordList(window, ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength"))
+        detail = ttk.Label(window, text="", wraplength=1000, padding=4)
+        detail.pack(anchor="w")
+        listing = RecordList(window, ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength",
+                                      "Assigned", "Eligibility"))
         listing.pack(fill="both", expand=True)
 
         def refresh():
             selected = form.variables["BlockPartChoice"].get()
             part = choices[selected]
-            rows = [row for row in self.available_inventory() if matches_color_value(part, row)]
-            listing.fill(rows, "value-eligible fabric pieces", self.sort)
+            current = {row["ID"]: row for row in self.available_inventory()}
+            ids = assigned.get(part["ID"], set())
+            rows = {row["ID"]: row for row in current.values() if matches_color_value(part, row)}
+            for piece_id in ids:
+                if piece_id not in rows:
+                    rows[piece_id] = self.db.get_piece(piece_id)
+            mappings = {row["InventoryColor"].casefold() for row in self.db.quilt_mappings(quilt_id)
+                        if row["PartColor"] == part["PartColor"]}
+            decorated = []
+            for row in rows.values():
+                reason = ("Outside available Fabric working selection" if row["ID"] not in current
+                          else "Color value no longer matches" if not matches_color_value(part, row)
+                          else "Inventory color not mapped" if not row["Color"] or row["Color"].casefold() not in mappings
+                          else "Color and value match; fit checked during planning")
+                decorated.append({**row, "Assigned": "Yes" if row["ID"] in ids else "", "Eligibility": reason})
+            eligible = [row for row in current.values() if matches_color_value(part, row)]
+            mapped_count = sum(bool(row["Color"]) and row["Color"].casefold() in mappings for row in eligible)
+            warning = ("No color-mapped, value-eligible pieces in the Fabric working selection. "
+                       if not mapped_count else "")
+            detail.configure(text=f"Part ID {part['ID']}: {len(ids)} assigned piece(s); "
+                             f"{len(eligible)} available value-eligible piece(s), "
+                             f"{mapped_count} with mapped colors. {warning}"
+                             "Rows include saved assignments even if no longer eligible. "
+                             "The list otherwise uses the available Fabric working selection.")
+            listing.fill(decorated, "fabric pieces", self.sort)
+
+        def change_assignment(add):
+            if form.variables["BlockPartChoice"].get() not in choices:
+                raise FieldError("Required", "BlockPartChoice")
+            part = choices[form.variables["BlockPartChoice"].get()]
+            ids = {int(value) for value in listing.tree.selection()}
+            if not ids:
+                raise FieldError("NoHighlight", "Fabric")
+            current = {row["ID"]: row for row in self.available_inventory()}
+            if add and any(piece_id not in current or not matches_color_value(part, current[piece_id])
+                           for piece_id in ids):
+                raise FieldError("Database", "Fabric", detail="Assign only available pieces in the Fabric "
+                                 "working selection that match the part's color value range.")
+            if add:
+                assigned.setdefault(part["ID"], set()).update(ids)
+            else:
+                assigned.setdefault(part["ID"], set()).difference_update(ids)
+                if not assigned[part["ID"]]:
+                    assigned.pop(part["ID"])
+            refresh()
+
+        def cancel():
+            if assigned != original and not messagebox.askyesno(
+                    "Unsaved Changes", "Discard unsaved fabric assignments?", parent=window):
+                return
+            window.destroy()
+
+        def save():
+            if assigned != original:
+                self.db.save_quilt_part_fabrics(quilt_id, revision, block_id, assigned)
+                self.load_quilt(quilt_id)
+            window.destroy()
 
         form.widgets["BlockPartChoice"].bind("<<ComboboxSelected>>", self.command(refresh))
         if choices:
@@ -204,7 +294,14 @@ class QuiltScreenMixin:
             refresh()
         else:
             listing.fill([], "value-eligible fabric pieces", self.sort)
-        self.button(window, "Close", window.destroy)
+        bar = ttk.Frame(window, padding=8)
+        bar.pack(fill="x")
+        self.button(bar, "Assign Fabric to Part", lambda: change_assignment(True))
+        self.button(bar, "Remove Assignment", lambda: change_assignment(False))
+        self.button(bar, "Save Selection and Return", save)
+        self.button(bar, "Cancel", cancel)
+        window.protocol("WM_DELETE_WINDOW", cancel)
+        window.bind("<Escape>", lambda _: cancel())
 
     def generate_quilt_plan(self):
         quilt_id = self.require_quilt()
@@ -212,6 +309,19 @@ class QuiltScreenMixin:
                 or self.quilt_name_form.values() != self.quilt_name_initial):
             raise FieldError("Database", "Quilt", detail="Save block quantities and color mappings, "
                              "or clear unsaved inputs before planning.")
+        parts = [part for use in self.db.quilt_uses(quilt_id) for part in self.db.block_parts(use["ID"])]
+        mapped = {row["PartColor"] for row in self.db.quilt_mappings(quilt_id)}
+        missing_colors = sorted({part["PartColor"] for part in parts} - mapped)
+        assigned = self.db.quilt_part_fabrics(quilt_id)
+        unrestricted = [part for part in parts if part["ID"] not in assigned]
+        if (missing_colors or unrestricted) and not messagebox.askyesno(
+                "Incomplete Fabric Choices",
+                "Unmapped colors: " + (", ".join(missing_colors) or "none")
+                + f"\nParts without assignments: {len(unrestricted)}. "
+                "Unassigned parts can use any otherwise matching fabric. "
+                "Unmapped colors will produce shortages. Continue planning?",
+                parent=self.root):
+            return
         plan_id = self.db.create_quilt_plan(
             quilt_id, self.quilt_revision, [row["ID"] for row in self.available_inventory()])
         self.quilt_initial = self.quilt_form.values()
@@ -244,6 +354,15 @@ class QuiltScreenMixin:
                  "The plan uses exact sizes and positions: verify rounded cuts fit without overlap "
                  "and check allocations before cutting.",
                  f"Required parts: {data['part_count']}"]
+        assignments = data.get("assignments", {})
+        if assignments:
+            lines.append("Fabric restrictions saved with this plan:")
+            for use in data["uses"]:
+                for part in use["parts"]:
+                    ids = assignments.get(str(part["ID"]), assignments.get(part["ID"], []))
+                    if ids:
+                        lines.append(f"  {use['block']['BlockName']} / {part['PartName']} "
+                                     f"(part ID {part['ID']}): fabric IDs {', '.join(map(str, ids))}")
         for source in data["sources"]:
             fabric = source["source"]
             value = fabric.get("ColorValue")
@@ -261,7 +380,8 @@ class QuiltScreenMixin:
                              f"{'mirrored' if cut['mirrored'] else 'not mirrored'}, "
                              f"assembly rotation {cut['block_rotation']} degrees")
         if data["missing"]:
-            lines.append("\nMissing parts (no mapped, value-eligible and fitting fabric found):")
+            lines.append("\nMissing parts (no assigned when restricted, mapped, value-eligible "
+                         "and fitting fabric found):")
             for item in data["missing"]:
                 minimum, maximum = item.get("MinimumColorValue"), item.get("MaximumColorValue")
                 value_range = f"; color value {minimum}-{maximum}" if minimum is not None else ""

@@ -46,16 +46,19 @@ HISTORY_FILTER_FIELDS = (
 )
 
 SCREEN_HELP = {
-    "Eligible Fabrics": ("Review fabrics matching a block part's color value range.",
-                         "Choose a part to list value-eligible available fabric in the Fabric working "
-                         "selection. Map inventory colors on the Quilt screen; planning also checks "
-                         "those mappings and the size of each piece."),
+    "Eligible Fabrics": ("Assign fabric pieces to a quilt block part.",
+                         "Choose a part, highlight fabric pieces and choose Assign Fabric to Part. "
+                         "Repeat for each part, then Save Selection and Return. Remove Assignment "
+                         "removes highlighted assignments; Cancel discards changes. No assignment means "
+                         "any otherwise matching fabric may be used. Assignments restrict color mappings; "
+                         "planning also checks value, availability and fit and does not reserve fabric."),
     "Quilt": ("Compose a quilt and plan its cuts.", "Create or select a quilt; choose approved block "
               "versions and their quantities. Map each part color to one or more inventory color "
               "values, then choose Plan Quilt. Plans pack conservative cut bounding rectangles, "
               "can report shortages and do not reserve or change inventory. Existing plans are "
               "snapshots; regenerate after changes. Available sources follow the Fabric working list. "
-              "Eligible Fabrics lists pieces matching a selected part's optional color value range. "
+              "Eligible Fabrics lets you assign individual pieces to parts as an additional restriction; "
+              "unassigned parts may use any otherwise matching piece. "
               "Choose Entire Quilt or By Block, then "
               "Print Quilt Plan to print the saved plan."),
     "QuiltBlock": ("Maintain reusable block designs.", "Save a draft block, add parts, set each "
@@ -280,8 +283,8 @@ SCREEN_HELP = {
 }
 
 FIELD_HELP = {
-    "BlockPartChoice": ("Choose a block part.", "Select a part to see available fabric pieces "
-                        "that match its optional color value range."),
+    "BlockPartChoice": ("Choose a block part.", "Select a part by block, name, ID, color and value range "
+                        "to review and change its assigned fabric pieces."),
     "ColorValue": ("Choose the fabric's lightness value.", "Optional: 1 is very light and 10 is "
                    "very dark. Leave blank if unknown. Ranged block parts cannot use unknown values."),
     "TemplateName": ("Choose a block template.", "Select a template. Its description appears below; "
@@ -394,8 +397,14 @@ FIELD_HELP = {
 }
 
 BUTTON_HELP = {
-    "Eligible Fabrics": ("Review fabric values for a block part.", "Choose an approved block, then "
-                         "review available pieces matching each part's color value range."),
+    "Eligible Fabrics": ("Assign fabric to block parts.", "Choose a block already added to the quilt, "
+                         "then assign pieces to each part and save the selection."),
+    "Assign Fabric to Part": ("Assign highlighted fabric pieces.", "Add highlighted eligible pieces "
+                              "to the selected part. Changes are saved with Save Selection and Return."),
+    "Remove Assignment": ("Remove highlighted fabric assignments.", "Remove highlighted pieces from "
+                          "the selected part. If none remain, the part is unrestricted by fabric ID."),
+    "Save Selection and Return": ("Save fabric assignments.", "Save all assignment changes for this block "
+                                  "and return to the quilt. This does not reserve or consume fabric."),
     "Create": ("Create the selected template.", "Create an editable draft with the dimensions, "
                "scale and seam allowance from the QuiltBlock form."),
     "Create from Template": ("Create a block from a named template.",
@@ -556,7 +565,8 @@ SCREEN_FIELDS = {
     "Screen Help": (Field("HelpContent"),),
 }
 SCREEN_COLUMNS = {
-    "Eligible Fabrics": ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength"),
+    "Eligible Fabrics": ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength",
+                         "Assigned", "Eligibility"),
     "QuiltBlock": BLOCK_COLUMNS,
     "Block Parts": ("ID", "PartName", "Shape", "PartColor", "NumberInBlock"),
     "ErrorMessage": ERROR_COLUMNS,
@@ -572,7 +582,7 @@ SCREEN_COLUMNS = {
 SCREEN_BUTTONS = {
     "Quilt": ("Add Quilt", "Set Block Quantity", "Remove Block", "Map Color", "Remove Mapping",
               "Eligible Fabrics", "Plan Quilt", "Print Quilt Plan"),
-    "Eligible Fabrics": ("Close",),
+    "Eligible Fabrics": ("Assign Fabric to Part", "Remove Assignment", "Save Selection and Return", "Cancel"),
     "QuiltBlock": ("Add", "Update", "Create from Template", "Create", "Cancel", "Delete", "Clear",
                    "New Version", "Parts", "Sketch", "Approve",
                    "Select Highlighted", "Filter", "Set Selection", "Sort", "Reset Selection", "Refresh"),
@@ -660,13 +670,16 @@ PROTECTED_LIST_HELP = {
     ("Block Parts", "PartColor"),
     ("QuiltBlock Filter", "Status"),
     ("Quilt Backs Filter", "Status"),
-    ("Quilt", "PartColor"),
     ("Quilt", "QuiltReportFormat"),
     ("Block Sketch", "Mirror"),
     ("DropDown Filter", "Default"),
     ("History Filter", "Action"),
 }
 COLUMN_HELP = {
+    "Assigned": ("Whether this piece is assigned to the selected part.",
+                 "Yes means the piece is assigned; save to keep assignment changes."),
+    "Eligibility": ("Whether this piece can be considered.", "Color mapping and color value are shown here; "
+                    "the planner also checks availability and fit. Assigned pieces outside the working list remain visible."),
     "Revision": ("Saved revision number.", "Changes whenever this block or its parts are saved."),
     "ID": ("Unique saved record number.", "Database-generated identity for this record; not a row "
            "count or list position. The identity remains stable when the list is sorted."),
@@ -793,6 +806,10 @@ def default_help():
             elif screen == "Add Item" and field.name == "Def":
                 pair = ("Choose whether this item is the default.",
                         "Set Default marks the added item as a default. You can clear the other defaults.")
+            elif (screen, field.name) == ("Quilt", "PartColor"):
+                pair = ("Choose a part color used in this quilt.",
+                        "Only colors used by parts in the quilt's added blocks are shown. "
+                        "Map each color to one or more inventory colors; mappings apply quilt-wide.")
             elif (screen, field.name) in DYNAMIC_LIST_HELP:
                 pair = (FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[0],
                         FIELD_HELP.get(field.name, (f"Choose {field.label}.", ""))[1]

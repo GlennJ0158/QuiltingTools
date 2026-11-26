@@ -129,7 +129,10 @@ class BlockUITests(unittest.TestCase):
                for value in ("1", "4", "5", "7", "10", "")]
         self.app.selected_ids = ids[:-2]
         self.app.show_screen("Quilt")
+        quilt = self.db.add_quilt("Test")
+        self.db.set_quilt_use(quilt, 1, block_id, 1)
         self.app.refresh_quilts()
+        self.app.load_quilt(quilt)
         choice = next(label for label, saved_id in self.app.approved_blocks.items() if saved_id == block_id)
         self.app.quilt_form.variables["ApprovedBlock"].set(choice)
         self.click(self.app.quilt_page, "Eligible Fabrics")
@@ -146,6 +149,100 @@ class BlockUITests(unittest.TestCase):
         for widget in descendants(window):
             if isinstance(widget, (ttk.Button, ttk.Entry)):
                 self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
+        self.errors.assert_not_called()
+
+    def test_four_patch_maps_used_colors_and_saves_part_assignments(self):
+        block_id = self.db.create_block_template("Four Patch", block())
+        self.db.approve_block(block_id, 1)
+        parts = self.db.block_parts(block_id)
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(sum(p["NumberInBlock"] for p in parts), 4)
+        red_a = self.db.save_piece(fabric(FabricName="Red A", Color="Red", UsableWidth="12", UsableLength="12"))
+        red_b = self.db.save_piece(fabric(FabricName="Red B", Color="Red", UsableWidth="12", UsableLength="12"))
+        yellow = self.db.save_piece(fabric(FabricName="Yellow", Color="Yellow", UsableWidth="12", UsableLength="12"))
+        quilt = self.db.add_quilt("Four patch quilt")
+        self.app.show_screen("Quilt")
+        self.app.refresh_quilts()
+        self.app.load_quilt(quilt)
+        choice = next(label for label, saved_id in self.app.approved_blocks.items() if saved_id == block_id)
+        self.app.quilt_form.variables["ApprovedBlock"].set(choice)
+        self.click(self.app.quilt_page, "Set Block Quantity")
+        self.assertEqual(set(self.app.quilt_form.widgets["PartColor"].cget("values")), {"Red", "Yellow"})
+        self.assertIn("Unmapped colors: Red, Yellow", self.app.quilt_summary.cget("text"))
+        for color in ("Red", "Yellow"):
+            self.app.quilt_form.variables["PartColor"].set(color)
+            self.app.quilt_form.variables["InventoryColor"].set(color)
+            self.click(self.app.quilt_page, "Map Color")
+        self.click(self.app.quilt_page, "Eligible Fabrics")
+        window = self.app.dialogs[-1]
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        for color, piece_id in (("Red", red_b), ("Yellow", yellow)):
+            label = next(value for value in form.widgets["BlockPartChoice"].cget("values")
+                         if f"; {color};" in value)
+            form.variables["BlockPartChoice"].set(label)
+            form.widgets["BlockPartChoice"].event_generate("<<ComboboxSelected>>")
+            self.root.update()
+            listing.tree.selection_set(str(piece_id))
+            self.click(window, "Assign Fabric to Part")
+            self.assertEqual(listing.tree.set(str(piece_id), "Assigned"), "Yes")
+        self.assertTrue(self.app.unfinished())
+        self.click(window, "Save Selection and Return")
+        self.assertFalse(window.winfo_exists())
+        expected = {p["ID"]: [red_b if p["PartColor"] == "Red" else yellow] for p in parts}
+        self.assertEqual(self.db.quilt_part_fabrics(quilt), expected)
+        self.assertIn("Parts without fabric assignments", self.app.quilt_summary.cget("text"))
+        plan = self.db.get_quilt_plan(self.db.create_quilt_plan(quilt, self.app.quilt_revision))
+        self.assertEqual({source["source"]["ID"] for source in plan["PlanData"]["sources"]}, {red_b, yellow})
+        self.assertNotIn(red_a, {source["source"]["ID"] for source in plan["PlanData"]["sources"]})
+        self.app.selected_ids = [red_a, yellow]
+        self.click(self.app.quilt_page, "Eligible Fabrics")
+        window = self.app.dialogs[-1]
+        form = next(child for child in window.winfo_children() if isinstance(child, Form))
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        label = next(value for value in form.widgets["BlockPartChoice"].cget("values") if "; Red;" in value)
+        form.variables["BlockPartChoice"].set(label)
+        form.widgets["BlockPartChoice"].event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(listing.tree.set(str(red_b), "Assigned"), "Yes")
+        self.assertIn("Outside available", listing.tree.set(str(red_b), "Eligibility"))
+        listing.tree.selection_set(str(red_b))
+        self.click(window, "Remove Assignment")
+        self.click(window, "Save Selection and Return")
+        self.assertNotIn(next(p["ID"] for p in parts if p["PartColor"] == "Red"),
+                         self.db.quilt_part_fabrics(quilt))
+        existing_plans = len(self.db.quilt_plans(quilt))
+        with patch("quilting.quilt_ui.messagebox.askyesno", return_value=False) as warning:
+            self.click(self.app.quilt_page, "Plan Quilt")
+        self.assertIn("Parts without assignments: 1", warning.call_args.args[1])
+        self.assertEqual(len(self.db.quilt_plans(quilt)), existing_plans)
+        self.errors.assert_not_called()
+
+    def test_assignment_cancel_and_navigation_guard_discard_unsaved_changes(self):
+        block_id = self.db.create_block_template("Four Patch", block())
+        self.db.approve_block(block_id, 1)
+        source = self.db.save_piece(fabric(Color="Red"))
+        quilt = self.db.add_quilt("Test")
+        self.db.set_quilt_use(quilt, 1, block_id, 1)
+        self.app.show_screen("Quilt")
+        self.app.refresh_quilts()
+        self.app.load_quilt(quilt)
+        self.app.quilt_form.variables["ApprovedBlock"].set(next(
+            name for name, value in self.app.approved_blocks.items() if value == block_id))
+        self.click(self.app.quilt_page, "Eligible Fabrics")
+        self.assertEqual(self.app.quilt_initial["ApprovedBlock"],
+                         self.app.quilt_form.variables["ApprovedBlock"].get())
+        window = self.app.dialogs[-1]
+        listing = next(child for child in window.winfo_children() if isinstance(child, RecordList))
+        listing.tree.selection_set(str(source))
+        self.click(window, "Assign Fabric to Part")
+        with patch("quilting.quilt_ui.messagebox.askyesno", return_value=False):
+            self.click(window, "Cancel")
+            self.assertTrue(window.winfo_exists())
+            self.app.show_screen("Fabric")
+            self.assertEqual(self.app.current, "Quilt")
+        self.click(window, "Cancel")
+        self.assertEqual(self.db.quilt_part_fabrics(quilt), {})
         self.errors.assert_not_called()
 
     def test_scale_displays_plain_percentage_without_changing_values_or_range(self):
