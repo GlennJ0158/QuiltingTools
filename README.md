@@ -146,8 +146,8 @@ exceed the available space or overlap: verify fit and allocations before cutting
 - Highlight one row to fill the form. **Add** creates another physical piece
   from those values, with a new ID and independent history; **Update** modifies
   the highlighted piece. This supports several rectangles cut from the same
-  bolt without re-entering their shared descriptions. Multiple highlights
-  are for list selection, not bulk editing. Unsaved changes require confirmation
+  bolt without re-entering their shared descriptions. Multiple highlights allow
+  bulk updates of checked fields. Unsaved changes require confirmation
   before a navigation or close operation discards them.
 - All entry fields are **left-aligned**, including measurements. Controls have
   fixed character widths reflecting expected input, rather than stretching with
@@ -161,6 +161,12 @@ exceed the available space or overlap: verify fit and allocations before cutting
   its record or history. Status changes can be reversed with Update. Retirement
   is not a cutting transaction. Dimensions can be corrected manually, with the
   reason recorded in Notes.
+- **Print List** and **Print Labels** use highlighted rows when present, or
+  otherwise the current Fabric working list, in its current sort order. Print
+  List creates a landscape, double-spaced worksheet with exact measurements.
+  Print Labels creates Avery 8660 sheets with a prominent rectangle ID and
+  12-point name and dimensions; width and length round up to 1/16 inch without
+  a rounding marker. Print labels at actual size (100%) on Avery 8660 stock.
 
 ### Quilt backs
 
@@ -464,6 +470,9 @@ from the UI and inventory persistence. Do not copy filament-specific stock
 calculations into quilting.
 
 ## Development
+
+For implementation tasks, commit and merge completed changes unless the request
+specifically says not to commit or merge.
 
 Install dependencies from `requirements.txt` into the active environment before testing.
 

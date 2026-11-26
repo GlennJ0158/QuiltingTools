@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from quilting.database import ALL_DROPDOWN_SCOPE, Database, UpgradeRequired
 from quilting.model import (
-    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_fractional_measurement, display_measurement,
+    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, FieldError, caption, display_fractional_measurement,
+    display_label_measurement, display_measurement, label_id_font_size,
     measurement, normalize_sort, validate_fields,
 )
 
@@ -80,6 +81,15 @@ class MeasurementTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(display_fractional_measurement(value), nearest)
                 self.assertEqual(display_fractional_measurement(value, round_up=True), upward)
+
+    def test_label_measurements_round_up_without_approximation_marker(self):
+        self.assertEqual(display_label_measurement(42_000_000), "42")
+        self.assertEqual(display_label_measurement(42_010_000), "42 1/16")
+        self.assertEqual(display_label_measurement(42_125_000), "42 1/8")
+
+    def test_label_id_font_size_scales_to_available_label_width(self):
+        self.assertEqual([label_id_font_size(value) for value in (1, 12, 123, 1234, 12345)],
+                         [52, 40, 26, 20, 16])
 
     def test_exact_fraction_and_decimal_round_trips(self):
         for value in ("42", "42 1/2", "1/64", "42.125", "0.000001", "0.123456", "10800"):

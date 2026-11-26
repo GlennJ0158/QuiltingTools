@@ -31,7 +31,7 @@ from .helptext import (
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
     SORT_FIELDS, Field, FieldError, caption, display_fabric_name, display_fractional_measurement, display_measurement,
-    measurement, normalize_sort,
+    display_label_measurement, label_id_font_size, measurement, normalize_sort,
     validate_fields,
 )
 
@@ -423,6 +423,8 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.update_button = self.button(actions, "Update", self.update)
         self.button(actions, "Clear", self.clear)
         self.button(actions, "History", self.open_history)
+        self.button(actions, "Print List", self.print_fabric_list)
+        self.button(actions, "Print Labels", self.print_fabric_labels)
         ttk.Label(self.setup_page, text="Setup/Utilities", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
         about = ttk.Frame(self.setup_page)
         about.pack(fill="x")
@@ -694,6 +696,113 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         if self.allow_discard():
             self.clear_details()
             self.refresh()
+
+    def fabric_print_rows(self):
+        selected_ids = set(self.list.tree.selection())
+        return [row for row in self.rows if not selected_ids or str(row["ID"]) in selected_ids]
+
+    def print_fabric_list(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Save Fabric Inventory Print List (new file only)",
+            defaultextension=".html", initialfile="FabricInventory.html",
+            filetypes=(("HTML report", "*.html"),),
+        )
+        if not destination:
+            return
+        columns = (
+            ("ID", lambda row: row["ID"]),
+            ("Fabric Name", lambda row: display_fabric_name(row["FabricName"], row["ID"])),
+            ("Color", lambda row: row["Color"] or ""),
+            ("Color Value", lambda row: row["ColorValue"] if row["ColorValue"] is not None else ""),
+            ("Fabric Pattern", lambda row: row["FabricPattern"] or ""),
+            ("Length", lambda row: display_measurement(row["UsableLength"])),
+            ("Width", lambda row: display_measurement(row["UsableWidth"])),
+            ("Grain Direction", lambda row: row["GrainDirection"]),
+            ("Print Direction", lambda row: row["PrintDirection"]),
+            ("Location", lambda row: row["StorageLocation"] or ""),
+        )
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{escape(str(value(row)))}</td>" for _, value in columns) + "</tr>"
+            for row in self.fabric_print_rows()
+        )
+        headings = "".join(f"<th>{escape(name)}</th>" for name, _ in columns)
+        report = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>Fabric Inventory</title>'
+            "<style>@page{size:letter landscape;margin:.35in}"
+            "body{font-family:Arial,sans-serif;font-size:9pt}"
+            "table{border-collapse:collapse;width:100%;table-layout:auto}"
+            "th,td{border:1px solid #777;padding:3px 5px;text-align:left;vertical-align:middle}"
+            "thead{display:table-header-group}tbody td{line-height:2}"
+            "tr{break-inside:avoid}</style></head><body>"
+            "<h1>Fabric Inventory</h1>"
+            f"<table><thead><tr>{headings}</tr></thead><tbody>{rows}</tbody></table>"
+            "</body></html>"
+        )
+        path = Path(destination).resolve()
+        with path.open("x", encoding="utf-8") as output:
+            output.write(report)
+        if not webbrowser.open(path.as_uri()):
+            raise FieldError("Database", "Print",
+                             detail=f"No browser opened. Open {path} manually and choose Print.")
+
+    def print_fabric_labels(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Save Avery 8660 Fabric Labels (new file only)",
+            defaultextension=".html", initialfile="FabricLabels.html",
+            filetypes=(("HTML report", "*.html"),),
+        )
+        if not destination:
+            return
+        rows = self.fabric_print_rows()
+        labels = []
+        for row in rows:
+            piece_id = str(row["ID"])
+            id_font_size = label_id_font_size(piece_id)
+            labels.append(
+                f'<div class="label"><div class="id" style="font-size:{id_font_size}pt">'
+                f'{escape(piece_id)}</div><div class="details">'
+                f'<div class="name">{escape(display_fabric_name(row["FabricName"], row["ID"]))}</div>'
+                f'<div>W:{escape(display_label_measurement(row["UsableWidth"]))}</div>'
+                f'<div>L:{escape(display_label_measurement(row["UsableLength"]))}</div>'
+                "</div></div>"
+            )
+        sheets = []
+        for offset in range(0, len(labels), 30):
+            sheets.append('<section class="sheet">' + "".join(labels[offset:offset + 30]) + "</section>")
+        empty_message = "<p>No fabric records in the current working list.</p>" if not rows else ""
+        report = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>Avery 8660 Fabric Labels</title>'
+            "<style>@page{size:letter portrait;margin:0}"
+            "html,body{margin:0;padding:0;font-family:Arial,sans-serif}"
+            ".sheet{box-sizing:border-box;width:8.5in;height:11in;padding:.5in .1875in;"
+            "display:grid;grid-template-columns:repeat(3,2.625in);"
+            "grid-template-rows:repeat(10,1in);column-gap:.125in;row-gap:0;"
+            "break-after:page;page-break-after:always}"
+            ".sheet:last-child{break-after:auto;page-break-after:auto}"
+            ".label{box-sizing:border-box;width:2.625in;height:1in;padding:.04in .05in;"
+            "display:grid;grid-template-columns:.75in 1fr;grid-template-rows:1fr;"
+            "column-gap:.05in;overflow:hidden}"
+            ".id{grid-column:1;grid-row:1;display:flex;align-items:center;justify-content:flex-start;"
+            "font-family:Arial,sans-serif;font-weight:bold;line-height:1;white-space:nowrap;overflow:hidden}"
+            ".details{grid-column:2;grid-row:1;min-width:0;display:flex;flex-direction:column;"
+            "justify-content:center;font-size:12pt;line-height:1.05;overflow:hidden}"
+            ".details>div{white-space:nowrap;overflow:hidden;text-overflow:clip}"
+            ".name{font-weight:bold;margin-bottom:.02in}"
+            "@media screen{.sheet{margin:12px auto;box-shadow:0 0 4px #888}}"
+            "</style></head><body>"
+            + (empty_message or "".join(sheets)) +
+            '<script>window.addEventListener("load",()=>{const c=document.createElement("canvas");'
+            "const x=c.getContext('2d');document.querySelectorAll('.id').forEach(e=>{"
+            "x.font='bold 1px Arial';const w=x.measureText(e.textContent.trim()).width;"
+            "e.style.fontSize=(Math.min(e.clientWidth/w,e.clientHeight)*.96)+'px';});"
+            "window.print();});</script></body></html>"
+        )
+        path = Path(destination).resolve()
+        with path.open("x", encoding="utf-8") as output:
+            output.write(report)
+        if not webbrowser.open(path.as_uri()):
+            raise FieldError("Database", "Print",
+                             detail=f"No browser opened. Open {path} manually and choose Print.")
 
     def clear(self):
         if self.allow_discard():

@@ -12,7 +12,7 @@ from tkinter import font as tkfont
 from quilting.database import ALL_DROPDOWN_SCOPE, SCHEMA_VERSION, Database
 from quilting.helptext import DROPDOWN_COLUMNS, NAVIGATION
 from quilting.model import (
-    ADD_ITEM, FABRIC_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
+    ADD_ITEM, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS, FieldError, validate_fields,
 )
 from quilting.ui import Application, Form, RecordList, display_back_measurement, display_timestamp
 from tests.test_inventory import fabric
@@ -130,6 +130,76 @@ class ScreenTests(unittest.TestCase):
         for piece_id in ids:
             self.assertEqual(self.app.back_stock.tree.set(str(piece_id), "FabricName"),
                              f"{name} ({piece_id})")
+
+    def test_print_fabric_list_and_labels_use_highlights_or_current_working_list(self):
+        first = self.add_piece(FabricName="Zeta", UsableWidth="42.01", UsableLength="72.01")
+        second = self.add_piece(FabricName="Alpha", UsableWidth="40", UsableLength="60")
+        third = self.add_piece(FabricName="Other")
+        self.app.list.tree.selection_set((str(first), str(second)))
+        self.root.update()
+
+        list_path = Path(self.temp.name) / "fabric-list.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(list_path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True) as browser:
+            self.click(self.app.inventory_page, "Print List")
+        browser.assert_called_once_with(list_path.as_uri())
+        report = list_path.read_text(encoding="utf-8")
+        cells = ReportCells()
+        cells.feed(report)
+        self.assertIn("@page{size:letter landscape", report)
+        self.assertIn("tbody td{line-height:2}", report)
+        for heading in ("ID", "Fabric Name", "Color", "Color Value", "Fabric Pattern",
+                        "Length", "Width", "Grain Direction", "Print Direction", "Location"):
+            self.assertIn(f"<th>{heading}</th>", report)
+        self.assertEqual(
+            cells.cells,
+            [
+                str(second), f"Alpha ({second})", "", "", "", "60", "40", "Unknown", "Unknown", "",
+                str(first), f"Zeta ({first})", "", "", "", "72.01", "42.01", "Unknown", "Unknown", "",
+            ],
+        )
+        self.assertNotIn(str(third), cells.cells)
+
+        label_path = Path(self.temp.name) / "fabric-labels.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(label_path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True):
+            self.click(self.app.inventory_page, "Print Labels")
+        labels = label_path.read_text(encoding="utf-8")
+        self.assertIn("width:8.5in;height:11in;padding:.5in .1875in", labels)
+        self.assertIn("grid-template-columns:repeat(3,2.625in)", labels)
+        self.assertIn("grid-template-rows:repeat(10,1in)", labels)
+        self.assertIn("font-size:52pt", labels)
+        self.assertEqual(labels.count("font-size:52pt"), 2)
+        self.assertIn("Math.min(e.clientWidth/w,e.clientHeight)", labels)
+        self.assertIn(f"Zeta ({first})", labels)
+        self.assertIn(f"Alpha ({second})", labels)
+        self.assertIn("W:42 1/16", labels)
+        self.assertIn("L:72 1/16", labels)
+        self.assertNotIn("~", labels)
+        self.assertNotIn(f"Other ({third})", labels)
+
+        self.app.list.tree.selection_remove(self.app.list.tree.selection())
+        self.app.filters["FabricName"] = "Alpha"
+        self.app.refresh()
+        self.assertEqual([row["ID"] for row in self.app.fabric_print_rows()], [second])
+        self.assertEqual([row["ID"] for row in self.app.rows], [second])
+
+        self.app.filters = {field.name: "" for field in FILTER_FIELDS}
+        self.app.selected_ids = None
+        self.app.refresh()
+        self.assertEqual([row["ID"] for row in self.app.fabric_print_rows()], [second, third, first])
+
+        for index in range(28):
+            self.db.save_piece(fabric(FabricName=f"Extra fabric {index}"))
+        self.app.refresh()
+        sheet_path = Path(self.temp.name) / "all-fabric-labels.html"
+        with patch("quilting.ui.filedialog.asksaveasfilename", return_value=str(sheet_path)), \
+                patch("quilting.ui.webbrowser.open", return_value=True):
+            self.click(self.app.inventory_page, "Print Labels")
+        sheet = sheet_path.read_text(encoding="utf-8")
+        self.assertEqual(sheet.count('<section class="sheet">'), 2)
+        self.assertEqual(sheet.count('<div class="label">'), 31)
+        self.errors.assert_not_called()
 
     def test_binding_audit_detects_unassigned_and_misassigned_controls(self):
         for field in FABRIC_FIELDS:

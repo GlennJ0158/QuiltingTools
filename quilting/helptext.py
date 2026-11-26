@@ -86,7 +86,10 @@ SCREEN_HELP = {
         "A blank checked optional field clears its value; required fields remain validated. "
         "History shows saved changes. Retire a piece instead of deleting its history. "
         "Select Highlighted, Filter and Set Selection restrict the working list; Reset Selection "
-        "shows all records. Sort saves an ordered list of sort fields. Quilt Backs and Quilt planning "
+        "shows all records. Print List and Print Labels use highlighted rows if any, otherwise the "
+        "current working list, in its current sort order. Print List is a landscape, double-spaced "
+        "inventory worksheet; Print Labels formats Avery 8660 sheets. Sort saves an ordered list "
+        "of sort fields. Quilt Backs and Quilt planning "
         "use only available fabric in this working list. Quilt Backs drafts do not "
         "change fabric; confirmed cuts retire sources and add operator-measured remnants. "
         "Navigation cancels unfinished work after confirmation; "
@@ -454,6 +457,14 @@ BUTTON_HELP = {
               "unsaved changes, clear the form without deleting saved records."),
     "History": ("Review the highlighted piece's saved changes.", "Select exactly one fabric "
                 "rectangle, then open its committed Before and After history."),
+    "Print List": ("Print a physical inventory worksheet.", "Save an HTML worksheet and print it in a "
+                   "browser. Highlighted rows are printed if any; otherwise the current working list "
+                   "is printed in its current sort order. The worksheet uses landscape layout and "
+                   "double-spaced rows so physical changes can be recorded."),
+    "Print Labels": ("Print Avery 8660 labels for fabric rectangles.", "Save an HTML label sheet and print "
+                     "it in a browser at actual size on Avery 8660 stock. Highlighted rows are labeled "
+                     "if any; otherwise the current working list is used in its current sort order. "
+                     "IDs are prominent; widths and lengths round up to 1/16 in without a rounding marker."),
     "Select Highlighted": ("Restrict the list to highlighted records.", "Requires at least one "
                            "highlight. Restricts the working list without changing inventory."),
     "Filter": ("Set Fabric list criteria.", "Open text, minimum-size and status filters. "
@@ -601,7 +612,7 @@ SCREEN_BUTTONS = {
     "Error Filter": ("Apply", "Clear Fields", "Cancel"),
     "Error Sort": ("Apply", "Clear Fields", "Cancel"),
     "Error Set": ("Save Current", "Apply Saved", "Delete Saved", "Cancel"),
-    "Fabric": ("Add", "Update", "Clear", "History", "Select Highlighted", "Filter",
+    "Fabric": ("Add", "Update", "Clear", "History", "Print List", "Print Labels", "Select Highlighted", "Filter",
                "Set Selection", "Sort", "Reset Selection", "Refresh"),
     "Quilt Backs": ("Generate Plans", "Set Sketch Color", "Preview Sketch", "Save Draft",
                     "Confirm Cuts", "Mark Assembled", "Print Plan", "Refresh Fabric", "Use Named Selection",
