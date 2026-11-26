@@ -2,13 +2,7 @@
 
 from decimal import Decimal
 
-from .model import UNITS_PER_INCH, display_measurement
-
-
-def _measurement(value):
-    if value == int(value):
-        return display_measurement(int(value))
-    return format(value / UNITS_PER_INCH, "f").rstrip("0").rstrip(".")
+from .model import display_fractional_measurement as _measurement
 
 
 def cutting_list_description(plan, mode):
@@ -59,7 +53,10 @@ def cutting_list_description(plan, mode):
              f"Quilt: {data['quilt']['QuiltName']} (revision {plan['QuiltRevision']}); plan {plan['ID']}",
              f"Total blocks: {sum(use['quantity'] for use in data['uses'])}; "
              f"required parts: {data['part_count']}",
-             "Informational snapshot: inventory is not reserved or changed."]
+             "Informational snapshot: inventory is not reserved or changed.",
+             "~ marks dimensions rounded to 1/16 in; cut sizes round up. "
+             "The plan uses exact sizes and positions: verify rounded cuts fit without overlap "
+             "and check allocations before cutting."]
 
     def append_group(group):
         part, item = group["part"], group["item"]
@@ -73,8 +70,8 @@ def cutting_list_description(plan, mode):
         lines.append(f"  {name}{group['required']} {part['PartColor']} {part['Shape']}; "
                      f"finished {finished} in; seam allowance "
                      f"{_measurement(group['block']['SeamAllowance'])} in; "
-                     f"cut bounding size {_measurement(item['cut_width'])} x "
-                     f"{_measurement(item['cut_length'])} in; "
+                     f"cut bounding size {_measurement(item['cut_width'], round_up=True)} x "
+                     f"{_measurement(item['cut_length'], round_up=True)} in; "
                      f"{'mirrored' if item['mirrored'] else 'not mirrored'}{value_range}")
         for source, count in group["sources"].values():
             value = source.get("ColorValue")

@@ -144,6 +144,20 @@ def display_measurement(value):
     return format(Decimal(value) / UNITS_PER_INCH, "f").rstrip("0").rstrip(".")
 
 
+def display_fractional_measurement(value, *, round_up=False):
+    """Format millionths of an inch to sixteenths, marking rounded values."""
+    sixteenths = Fraction(value) * 16 / UNITS_PER_INCH
+    if round_up:
+        rounded = -(-sixteenths.numerator // sixteenths.denominator)
+    else:
+        rounded = (2 * sixteenths.numerator + sixteenths.denominator) // (2 * sixteenths.denominator)
+    inches = Fraction(rounded, 16)
+    whole, numerator = divmod(inches.numerator, inches.denominator)
+    fraction = f"{numerator}/{inches.denominator}" if numerator else ""
+    text = f"{whole} {fraction}" if whole and fraction else str(whole) if whole or not fraction else fraction
+    return ("~" if sixteenths != rounded else "") + text
+
+
 def validate_fields(fields, values, choices=None):
     expected = {field.name for field in fields}
     if set(values) != expected:

@@ -8,7 +8,6 @@ import traceback
 import tkinter as tk
 import webbrowser
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
@@ -31,7 +30,8 @@ from .helptext import (
 )
 from .model import (
     ADD_ITEM, DROPDOWN_FIELDS, FABRIC_FIELDS, FILTER_FIELDS, LIST_COLUMNS, NUMERIC_COLUMNS,
-    SORT_FIELDS, Field, FieldError, caption, display_measurement, measurement, normalize_sort,
+    SORT_FIELDS, Field, FieldError, caption, display_fractional_measurement, display_measurement,
+    measurement, normalize_sort,
     validate_fields,
 )
 
@@ -77,8 +77,7 @@ def display_timestamp(value):
 
 
 def display_back_measurement(value):
-    rounded = (Decimal(value) / INCH).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-    return format(rounded, "f").rstrip("0").rstrip(".") if rounded % 1 else str(int(rounded))
+    return display_fractional_measurement(value)
 
 
 def display_field_key(value):
@@ -256,7 +255,7 @@ class Form(ttk.Frame):
 
 
 class RecordList(ttk.Frame):
-    def __init__(self, parent, columns, measurement_display=display_measurement, name_limit=None,
+    def __init__(self, parent, columns, measurement_display=display_fractional_measurement, name_limit=None,
                  formatters=None):
         super().__init__(parent, padding=(8, 0, 8, 8))
         self.columns = columns
@@ -305,6 +304,7 @@ class RecordList(ttk.Frame):
 
     def fill(self, rows, noun, sort, context=""):
         self.tree.delete(*self.tree.get_children())
+        has_rounded_measurement = False
         for row in rows:
             values = [
                 self.formatters[name](row[name]) if name in self.formatters
@@ -316,10 +316,15 @@ class RecordList(ttk.Frame):
                 else str(row[name])[:25] if name == self.name_limit
                 else "" if row[name] is None else row[name] for name in self.columns
             ]
+            has_rounded_measurement |= any(
+                name in ("UsableWidth", "UsableLength", "BackWidth", "BackLength",
+                         "FinishedWidth", "FinishedLength") and str(value).startswith("~")
+                for name, value in zip(self.columns, values))
             self.tree.insert("", "end", iid=str(row["ID"]), values=values)
         order = ", ".join(f"{caption(name)} {direction}" for name, direction in sort) if sort else ""
         self.heading.configure(text=f"{len(rows)} {noun} selected"
-                               + (f"; Sort: {order}" if order else "") + context)
+                               + (f"; Sort: {order}" if order else "") + context
+                               + ("; ~ means rounded to 1/16 in" if has_rounded_measurement else ""))
 
 
 class Application(BlockScreenMixin, QuiltScreenMixin):
@@ -1539,7 +1544,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         self.back_status.configure(
             text=f"Back {back['ID']}: {back['BackName']} — {back['Status']}; "
                  f"{display_back_measurement(back['BackWidth'])} × "
-                 f"{display_back_measurement(back['BackLength'])} in.",
+                 f"{display_back_measurement(back['BackLength'])} in. (~ rounded to 1/16 in)",
         )
 
     def open_back_cut(self):
@@ -1561,14 +1566,17 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
         window.geometry("760x420")
         ttk.Label(
             window, text="Leave both remainder fields blank if the source was consumed. "
-                         "Otherwise enter the measured reusable remainder in the source's recorded orientation.",
+                         "Otherwise enter the measured reusable remainder in the source's recorded orientation. "
+                         "~ marks values rounded to 1/16 in; cut sizes round up. "
+                         "The plan uses exact sizes and positions: verify rounded cuts fit without "
+                         "overlap and check allocations before cutting.",
             wraplength=700, padding=8,
         ).pack(anchor="w")
         for source_id, panels in sources.items():
             panel = panels[0]
             planned = ", ".join(
-                f"Part {item['PanelNumber']}: {display_back_measurement(item['CutWidth'])} × "
-                f"{display_back_measurement(item['CutLength'])} in"
+                f"Part {item['PanelNumber']}: {display_fractional_measurement(item['CutWidth'], round_up=True)} × "
+                f"{display_fractional_measurement(item['CutLength'], round_up=True)} in"
                 for item in panels
             )
             ttk.Label(
@@ -1576,7 +1584,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 text=f"Source {source_id}: {panel['FabricName']} "
                      f"({panel['InventoryColor'] or 'no color recorded'}), "
                      f"{display_back_measurement(panel['SourceWidth'])} × "
-                     f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (rounded): {planned}",
+                     f"{display_back_measurement(panel['SourceLength'])} in. Planned cuts (~ rounded up): {planned}",
                 padding=(8, 4),
             ).pack(anchor="w")
         help_names = {field.name: ("RemainingWidth" if field.name.startswith("RemainingWidth")
@@ -1644,10 +1652,14 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             + "</title><style>body{font-family:sans-serif}table{border-collapse:collapse}"
             "th,td{border:1px solid #888;padding:6px;text-align:left}"
             "@media print{button{display:none}}</style></head><body>"
-            f"<h1>{escape(title)}</h1><p>Quilt: {quilt_width / INCH:g} × "
-            f"{quilt_length / INCH:g} in. Back target: {layout.target_width / INCH:g} × "
-            f"{layout.target_length / INCH:g} in. Uniform seam allowance: "
-            f"{layout.seam_allowance / INCH:g} in.</p>"
+            f"<h1>{escape(title)}</h1><p>Quilt: {display_fractional_measurement(quilt_width)} × "
+            f"{display_fractional_measurement(quilt_length)} in. Back target: "
+            f"{display_fractional_measurement(layout.target_width)} × "
+            f"{display_fractional_measurement(layout.target_length)} in. Uniform seam allowance: "
+            f"{display_fractional_measurement(layout.seam_allowance)} in.</p>"
+            "<p>~ marks values rounded to 1/16 in; cut sizes round up. "
+            "The layout uses exact sizes and positions: verify rounded cuts fit without overlap "
+            "and check allocations before cutting.</p>"
             f"<p>Assembly order: {assembly_order}. "
             "Join adjacent edges using the stated uniform seam allowance.</p>"
             f"{layout_svg(layout)}{escaped_legend(layout)}"
@@ -2061,7 +2073,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
             if len(selected) != 1:
                 return
             row = next(row for row in rows if row["ID"] == int(selected[0]))
-            lines = []
+            lines = ["~ marks values rounded to 1/16 in."]
             for key, label in (("BeforeValues", "Before"), ("AfterValues", "After")):
                 snapshot = json.loads(row[key]) if row[key] is not None else None
                 lines.append(label + ":")
@@ -2070,7 +2082,7 @@ class Application(BlockScreenMixin, QuiltScreenMixin):
                 else:
                     for name, value in snapshot.items():
                         if name in ("UsableWidth", "UsableLength"):
-                            value = display_measurement(value) + " in"
+                            value = display_fractional_measurement(value) + " in"
                         elif name in ("DateCreated", "DateModified"):
                             value = display_timestamp(value)
                         lines.append(f"  {caption(name)}: {value}")

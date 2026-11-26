@@ -239,7 +239,7 @@ class BlockUITests(unittest.TestCase):
 
     def test_print_sketch_escapes_text_and_includes_cut_outlines(self):
         block_id = self.db.add_block(block(BlockName="<Block>"))
-        self.db.save_block_part(block_id, 1, part(PartName="<Panel>"))
+        self.db.save_block_part(block_id, 1, part(PartName="<Panel>", PartWidth="5.01"))
         self.app.refresh_blocks(block_id)
         self.click(self.app.block_page, "Sketch")
         window = self.app.dialogs[-1]
@@ -252,7 +252,8 @@ class BlockUITests(unittest.TestCase):
         self.assertIn("&lt;Block&gt;", report)
         self.assertIn("&lt;Panel&gt;", report)
         self.assertIn("Cutting outlines", report)
-        self.assertIn("5.500000 x 10.500000", report)
+        self.assertIn("~5 9/16 x 10 1/2", report)
+        self.assertIn("~ marks cut dimensions rounded up", report)
         self.assertIn("Parts overlap", report)
         self.errors.assert_not_called()
 

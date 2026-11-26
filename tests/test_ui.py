@@ -92,10 +92,16 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(self.db.get_piece(self.app.piece_id)["UsableWidth"], 40_015_625)
         self.assertEqual(validate_fields(FABRIC_FIELDS, self.app.form.values()),
                          validate_fields(FABRIC_FIELDS, values))
+        piece_id = self.app.piece_id
+        self.app.load_piece(piece_id)
+        self.assertEqual(self.app.form.variables["UsableWidth"].get(), "40 1/64")
+        self.assertEqual(self.app.form.variables["UsableLength"].get(), "64.123456")
         self.app.form.variables["Notes"].set("Updated notes")
         self.app.update()
         self.root.update()
         self.assertEqual(self.db.get_piece(self.app.piece_id)["Notes"], "Updated notes")
+        self.assertEqual(self.db.get_piece(piece_id)["UsableWidth"], 40_015_625)
+        self.assertEqual(self.db.get_piece(piece_id)["UsableLength"], 64_123_456)
         self.errors.assert_not_called()
 
     def test_binding_audit_detects_unassigned_and_misassigned_controls(self):
@@ -435,7 +441,8 @@ class ScreenTests(unittest.TestCase):
             self.assertEqual(int(self.app.back_form.widgets[name].cget("width")), 8)
         self.assertEqual(self.app.back_form.grid_columnconfigure(1)["weight"], 0)
         values = self.app.back_stock.tree.item(str(source), "values")
-        self.assertEqual(values[LIST_COLUMNS.index("UsableWidth")], "100.123")
+        self.assertEqual(values[LIST_COLUMNS.index("UsableWidth")], "~100 1/8")
+        self.assertIn("~ means rounded", self.app.back_stock.heading.cget("text"))
         self.app.back_form.assign({
             "BackName": "Back", "QuiltWidth": "30", "QuiltLength": "30",
             "Margin": "0", "SideMargin": "0", "SeamAllowance": "1",
@@ -447,8 +454,8 @@ class ScreenTests(unittest.TestCase):
         self.app.generate_back_plans()
         self.assertEqual(self.app.back_candidates.heading.cget("text"), "0 ranked layout plans selected")
         self.assertEqual(self.db.get_piece(source)["UsableWidth"], 100_123_456)
-        self.assertEqual(display_back_measurement(15_625), "0.016")
-        self.assertEqual(display_back_measurement(1_234_500), "1.235")
+        self.assertEqual(display_back_measurement(15_625), "~0")
+        self.assertEqual(display_back_measurement(1_234_500), "~1 1/4")
         self.assertEqual(display_back_measurement(10_800_000_000), "10800")
 
     def test_quilt_back_saved_plans_have_isolated_ordered_working_list_tools(self):
@@ -1324,8 +1331,12 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("<svg", report)
         self.assertIn("Inventory fabric", report)
         self.assertIn("Teal", report)
+        self.assertIn("verify rounded cuts fit without overlap", report)
+        self.assertIn("check allocations before cutting", report)
         self.app.open_back_cut()
         dialog_window = next(iter(self.app.dialog_forms))
+        self.assertTrue(any("verify rounded cuts fit without overlap" in widget.cget("text")
+                            for widget in descendants(dialog_window) if isinstance(widget, ttk.Label)))
         form = self.app.dialog_forms[dialog_window][0]
         for widget in descendants(dialog_window):
             if isinstance(widget, (ttk.Button, ttk.Entry)):

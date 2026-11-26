@@ -6,6 +6,7 @@ from pathlib import Path
 from quilting.database import Database
 from quilting.model import FieldError
 from quilting.quilt_report import cutting_list_description
+from quilting.quilt_ui import QuiltScreenMixin
 from tests.test_blocks import block, part
 from tests.test_inventory import downgrade_color_value_schema, fabric
 
@@ -183,6 +184,24 @@ class QuiltCuttingListTests(unittest.TestCase):
         self.assertIn(f"18 from Fabric {self.fabric_a}: First / Red, 2 1/2 x 45 in", report)
         self.assertIn(f"16 from Fabric {self.fabric_b}: Second / Red, 2 1/2 x 40 in", report)
         self.assertIn("Missing: 2", report)
+
+    def test_rounding_plan_output_does_not_change_snapshot_or_claim_fit(self):
+        data = self.plan["PlanData"]
+        source = data["sources"][0]
+        source["source"]["UsableWidth"] = 2_510_000
+        cut = source["cuts"][0]
+        cut["cut_width"] = 2_510_000
+        cut["x"] = 10_000
+        before = json.dumps(data, sort_keys=True)
+        for text in (QuiltScreenMixin.quilt_plan_description(self.plan),
+                     cutting_list_description(self.plan, "Entire Quilt"),
+                     cutting_list_description(self.plan, "By Block")):
+            self.assertIn("~2 9/16", text)
+            self.assertIn("~2 1/2", text)
+            self.assertIn("verify rounded cuts fit without overlap", text)
+            self.assertIn("check allocations before cutting", text)
+        self.assertIn("source position ~0", QuiltScreenMixin.quilt_plan_description(self.plan))
+        self.assertEqual(json.dumps(data, sort_keys=True), before)
 
     def test_by_block_keeps_block_totals_and_partial_allocations_separate(self):
         report = cutting_list_description(self.plan, "By Block")

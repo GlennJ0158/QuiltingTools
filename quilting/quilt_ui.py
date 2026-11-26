@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .blocks import COLORS
-from .model import Field, FieldError, display_measurement
+from .model import Field, FieldError, display_fractional_measurement
 from .quilt_planner import matches_color_value
 from .quilt_report import cutting_list_description
 
@@ -235,10 +235,14 @@ class QuiltScreenMixin:
     @staticmethod
     def quilt_plan_description(plan):
         data = plan["PlanData"]
-        fmt = lambda value: display_measurement(value) if value else "0"
+        fmt = display_fractional_measurement
+        cut_fmt = lambda value: display_fractional_measurement(value, round_up=True)
         lines = [f"Quilt: {data['quilt']['QuiltName']} (revision {plan['QuiltRevision']}); plan {plan['ID']}",
                  "Informational only: inventory is not reserved or changed. Replan after inventory changes.",
                  "Packing uses conservative cut-outline bounding rectangles; it is not a proven optimum.",
+                 "~ marks dimensions and positions rounded to 1/16 in; cut sizes round up. "
+                 "The plan uses exact sizes and positions: verify rounded cuts fit without overlap "
+                 "and check allocations before cutting.",
                  f"Required parts: {data['part_count']}"]
         for source in data["sources"]:
             fabric = source["source"]
@@ -250,7 +254,7 @@ class QuiltScreenMixin:
             for cut in source["cuts"]:
                 lines.append(f"  Block {cut['block_name']} (ID {cut['block_id']}), "
                              f"{cut['part_name']} (ID {cut['part_id']}), {cut['shape']} / {cut['color']}: "
-                             f"bounding cut {fmt(cut['cut_width'])} x {fmt(cut['cut_length'])} in; "
+                             f"bounding cut {cut_fmt(cut['cut_width'])} x {cut_fmt(cut['cut_length'])} in; "
                              f"source position {fmt(cut['x'])}, {fmt(cut['y'])}; "
                              f"{'rotated 90 degrees' if cut['rotated'] else 'not rotated'}; "
                              f"block copy {cut['block_number']}, part instance {cut['instance']}, "
@@ -262,7 +266,7 @@ class QuiltScreenMixin:
                 minimum, maximum = item.get("MinimumColorValue"), item.get("MaximumColorValue")
                 value_range = f"; color value {minimum}-{maximum}" if minimum is not None else ""
                 lines.append(f"  {item['block_name']} / {item['part_name']} / {item['color']}: "
-                             f"{item['count']} of {fmt(item['cut_width'])} x {fmt(item['cut_length'])} in "
+                             f"{item['count']} of {cut_fmt(item['cut_width'])} x {cut_fmt(item['cut_length'])} in "
                              f"({'mirrored' if item['mirrored'] else 'not mirrored'}{value_range})")
         else:
             lines.append("\nAll required parts allocated in this snapshot.")

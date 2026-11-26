@@ -129,6 +129,12 @@ larger than 10,800 inches (a full bolt). SQLite stores integer millionths of an 
 binary floating-point rounding; fractions and decimals round-trip exactly.
 Metric entry/conversion is not yet implemented.
 
+Read-only dimensions are displayed as reduced fractions to the nearest 1/16
+inch (halfway values round up); `~` marks a rounded value. Calculated cut sizes
+round up to the next 1/16 inch instead. Editable fields retain exact values.
+Plans and diagrams still use exact sizes and positions, so rounded-up cuts can
+exceed the available space or overlap: verify fit and allocations before cutting.
+
 ### Maintaining inventory
 
 - **Add** saves a new rectangle. **Clear** clears the details and highlights to
@@ -182,10 +188,8 @@ best feasible panel-size tier. The alternatives are compromises, not an automati
 promise of minimum waste. This release does not search arbitrary unequal panels,
 T-joints, general two-dimensional nesting or layouts above 20 panels.
 The layout heading reports the number of candidates without a sort order.
-Quilt Backs list and cut-dialog measurements are rounded to three decimal places
-for display; entered values, stored data, calculations, and printed plans retain
-their full precision. Measurement controls are eight characters wide but do not
-limit the length of valid input.
+Quilt Backs measurement controls are eight characters wide but do not limit the
+length of valid input. The fractional display rules above also apply to printed plans.
 
 Preview the assembly sketch, then **Save Draft** and **Print Plan** as needed.
 Drafts retain source IDs/revisions and do not reserve or modify inventory. At
