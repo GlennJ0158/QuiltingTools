@@ -8,7 +8,7 @@ from quilting.backs import INCH, generate_layouts
 from quilting.database import Database, SCHEMA_VERSION, UpgradeRequired
 from quilting.helptext import HELP_FIELDS, default_help
 from quilting.model import FieldError
-from tests.test_inventory import assert_legacy_rows_preserved, downgrade_dropdown_schema, fabric
+from tests.test_inventory import assert_legacy_rows_preserved, downgrade_color_value_schema, downgrade_dropdown_schema, fabric
 
 
 class HelpTextTests(unittest.TestCase):
@@ -152,6 +152,7 @@ class HelpTextTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE WorkingListSet")
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 4")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -204,6 +205,7 @@ class HelpTextTests(unittest.TestCase):
             for table in ("QuiltBackCutSource", "QuiltBackPanel", "QuiltBack"):
                 self.db.connection.execute(f"DROP TABLE {table}")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 5")
         self.db.close()
         self.db = Database(self.path, upgrade=True)
@@ -253,6 +255,7 @@ class HelpTextTests(unittest.TestCase):
                 "WHERE Def = 1 AND Use = 1")
             self.db.connection.execute("ALTER TABLE QuiltBack DROP COLUMN SideMargin")
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 7")
         self.db.close()
         with self.assertRaises(UpgradeRequired):
@@ -283,6 +286,7 @@ class HelpTextTests(unittest.TestCase):
             self.db.connection.execute("DROP TABLE HelpText")
             downgrade_dropdown_schema(self.db.connection)
             self.db.connection.execute("ALTER TABLE FabricPiece RENAME COLUMN FabricPattern TO PatternName")
+            downgrade_color_value_schema(self.db.connection)
             self.db.connection.execute("PRAGMA user_version = 2")
         tables = ("FabricPiece", "FabricHistory", "Dropdown", "ErrorText")
         before = {name: [tuple(row) for row in self.db.connection.execute(f"SELECT * FROM {name}")]

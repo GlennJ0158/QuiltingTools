@@ -26,7 +26,7 @@ def main():
             if not messagebox.askyesno(
                     "Database Upgrade Required",
                     "Close all other copies of Quilting Tools before continuing.\n\n"
-                    "Upgrade Fabric Pattern, dropdown keys, HelpText, ErrorMessage and Quilt Backs support, preserving "
+                    "Upgrade the database, including fabric color values and block part ranges, preserving "
                     "existing values and selections? A verified PreUpgrade backup will be retained beside the "
                     "database. Existing fabric, history, IDs and selections will be preserved.\n\n"
                     "Upgrade now?", parent=root):

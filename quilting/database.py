@@ -28,7 +28,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class MissingHelp(FieldError):
@@ -63,7 +63,12 @@ CREATE TABLE BlockPart (
     SideA INTEGER,
     SideB INTEGER,
     SideC INTEGER,
-    Diameter INTEGER
+    Diameter INTEGER,
+    MinimumColorValue INTEGER CHECK(MinimumColorValue IS NULL OR
+        (typeof(MinimumColorValue) = 'integer' AND MinimumColorValue BETWEEN 1 AND 10)),
+    MaximumColorValue INTEGER CHECK((MaximumColorValue IS NULL AND MinimumColorValue IS NULL) OR
+        (typeof(MaximumColorValue) = 'integer' AND MaximumColorValue BETWEEN 1 AND 10
+         AND MinimumColorValue IS NOT NULL AND MinimumColorValue <= MaximumColorValue))
 );
 CREATE TABLE BlockPartPlacement (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,7 +241,9 @@ CREATE TABLE FabricPiece (
     Notes TEXT NOT NULL CHECK(length(Notes) <= 4000),
     Revision INTEGER NOT NULL DEFAULT 1 CHECK(Revision >= 1),
     DateCreated TEXT NOT NULL,
-    DateModified TEXT NOT NULL
+    DateModified TEXT NOT NULL,
+    ColorValue INTEGER CHECK(ColorValue IS NULL OR
+        (typeof(ColorValue) = 'integer' AND ColorValue BETWEEN 1 AND 10))
 );
 CREATE TABLE FabricHistory (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,7 +278,8 @@ CREATE INDEX FabricNameIndex ON FabricPiece(FabricName COLLATE NOCASE, ID);
 CREATE INDEX FabricHistoryPieceIndex ON FabricHistory(FabricPieceID, ID);
 """ + DROPDOWN_SCHEMA + HELP_SCHEMA + ERROR_SCHEMA + WORKING_LIST_SCHEMA + BACK_SCHEMA + BLOCK_SCHEMA
 TABLE_COLUMNS = {
-    "FabricPiece": ("ID", *FABRIC_NAMES, "Revision", "DateCreated", "DateModified"),
+    "FabricPiece": ("ID", *(name for name in FABRIC_NAMES if name != "ColorValue"),
+                    "Revision", "DateCreated", "DateModified", "ColorValue"),
     "FabricHistory": ("ID", "FabricPieceID", "Action", "BeforeValues", "AfterValues", "DateCreated"),
     "SelectionSet": ("ID", "SetName", "DateCreated"),
     "SelectionMember": ("SelectionSetID", "FabricPieceID"),
@@ -302,7 +310,8 @@ TABLE_COLUMNS = {
     "QuiltBlock": ("ID", "ParentID", "BlockName", "Description", "FinishedWidth", "FinishedLength",
                    "Scale", "SeamAllowance", "Status", "Revision", "DateCreated", "DateModified"),
     "BlockPart": ("ID", "QuiltBlockID", "PartName", "Shape", "PartColor", "NumberInBlock",
-                  "PartWidth", "PartLength", "SideA", "SideB", "SideC", "Diameter"),
+                  "PartWidth", "PartLength", "SideA", "SideB", "SideC", "Diameter",
+                  "MinimumColorValue", "MaximumColorValue"),
     "BlockPartPlacement": ("ID", "BlockPartID", "Instance", "X", "Y", "Rotation", "Mirrored"),
     "BlockSet": ("ID", "SetName", "DateCreated"),
     "BlockSetMember": ("SelectionSetID", "QuiltBlockID"),
@@ -408,6 +417,10 @@ class Database:
             if version < 3 and table == "HelpText":
                 continue
             columns = tuple(row[1] for row in connection.execute(f'PRAGMA table_info("{table}")'))
+            if version < 15 and table == "FabricPiece":
+                expected = expected[:-1]
+            if version < 15 and table == "BlockPart":
+                expected = expected[:-2]
             if table == "FabricPiece" and version < 14:
                 expected = tuple("PatternName" if name == "FabricPattern" else name for name in expected)
             if table == "Dropdown" and version < 11:
@@ -455,7 +468,8 @@ class Database:
                 self.connection.execute("INSERT INTO WorkingListMember SELECT * FROM OldWorkingListMember")
                 self.connection.execute("DROP TABLE OldWorkingListMember")
                 self.connection.execute("DROP TABLE OldWorkingListSet")
-            self._upgrade_fabric_pattern()
+            if version < 14:
+                self._upgrade_fabric_pattern()
             if version >= 5:
                 self._upgrade_dropdown_scopes(version)
             if 2 <= version < 8:
@@ -481,6 +495,19 @@ class Database:
                     "ALTER TABLE QuiltBack ADD COLUMN SideMargin INTEGER NOT NULL DEFAULT 0 "
                     "CHECK(SideMargin >= 0)")
                 self.connection.execute("UPDATE QuiltBack SET SideMargin = Margin")
+            self.connection.execute(
+                "ALTER TABLE FabricPiece ADD COLUMN ColorValue INTEGER CHECK(ColorValue IS NULL OR "
+                "(typeof(ColorValue) = 'integer' AND ColorValue BETWEEN 1 AND 10))")
+            if version >= 9:
+                self.connection.execute(
+                    "ALTER TABLE BlockPart ADD COLUMN MinimumColorValue INTEGER "
+                    "CHECK(MinimumColorValue IS NULL OR "
+                    "(typeof(MinimumColorValue) = 'integer' AND MinimumColorValue BETWEEN 1 AND 10))")
+                self.connection.execute(
+                    "ALTER TABLE BlockPart ADD COLUMN MaximumColorValue INTEGER "
+                    "CHECK((MaximumColorValue IS NULL AND MinimumColorValue IS NULL) OR "
+                    "(typeof(MaximumColorValue) = 'integer' AND MaximumColorValue BETWEEN 1 AND 10 "
+                    "AND MinimumColorValue IS NOT NULL AND MinimumColorValue <= MaximumColorValue))")
             self.connection.execute(
                 "DELETE FROM WorkingListMember WHERE SelectionSetID IN "
                 "(SELECT ID FROM WorkingListSet WHERE ScreenName = 'DropDown') "
@@ -622,10 +649,10 @@ class Database:
             )
 
     def _upgrade_fabric_nullability(self):
-        columns = ", ".join(FABRIC_NAMES)
+        columns = ", ".join(name for name in FABRIC_NAMES if name != "ColorValue")
         values = ", ".join(
             f"NULLIF({name}, '')" if name in ("Color", "FabricPattern", "StorageLocation") else name
-            for name in FABRIC_NAMES
+            for name in FABRIC_NAMES if name != "ColorValue"
         )
         self.connection.execute("""
             CREATE TABLE FabricPieceNullable (
@@ -1225,6 +1252,11 @@ class Database:
         if error.key == "Conflict" and error.field == "QuiltBlock" and "reason" in error.details:
             message, resolution = BLOCK_CONFLICT_MESSAGES[error.details["reason"]]
             return f"{caption(error.field)}: {message}\n\n{resolution}\n\nError ID: {row['ErrorTextID']}"
+        if (error.key == "Choice" and error.field == "MinimumColorValue"
+                and error.details.get("reason") == "range_order"):
+            return ("Minimum Color Value: The minimum cannot exceed the maximum.\n\n"
+                    "Choose an ordered range from 1 to 10, or leave both values blank.\n\n"
+                    f"Error ID: {row['ErrorTextID']}")
         text = f"{caption(error.field)}: {row['MessageTemplate'].format(**error.details)}"
         if row["ResolutionText"]:
             text += f"\n\n{row['ResolutionText']}"
@@ -1322,11 +1354,11 @@ class Database:
                 part = parse_part(spec["values"], choices)
                 part_cursor = self.connection.execute(
                     "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
-                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter, MinimumColorValue, MaximumColorValue) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (block_id, *(part[field] for field in (
                         "PartName", "Shape", "PartColor", "NumberInBlock", "PartWidth", "PartLength",
-                        "SideA", "SideB", "SideC", "Diameter"))))
+                        "SideA", "SideB", "SideC", "Diameter", "MinimumColorValue", "MaximumColorValue"))))
                 part_id = part_cursor.lastrowid
                 self.connection.executemany(
                     "INSERT INTO BlockPartPlacement "
@@ -1370,10 +1402,11 @@ class Database:
             for part in self.block_parts(block_id):
                 result = self.connection.execute(
                     "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
-                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter, MinimumColorValue, MaximumColorValue) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (new_id, *(part[name] for name in (
                         "PartName", "Shape", "PartColor", "NumberInBlock", "PartWidth", "PartLength",
-                        "SideA", "SideB", "SideC", "Diameter"))))
+                        "SideA", "SideB", "SideC", "Diameter", "MinimumColorValue", "MaximumColorValue"))))
                 self.connection.execute(
                     "INSERT INTO BlockPartPlacement (BlockPartID, Instance, X, Y, Rotation, Mirrored) "
                     "SELECT ?, Instance, X, Y, Rotation, Mirrored FROM BlockPartPlacement WHERE BlockPartID = ?",
@@ -1389,13 +1422,15 @@ class Database:
             if part_id is None:
                 cursor = self.connection.execute(
                     "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
-                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "PartWidth, PartLength, SideA, SideB, SideC, Diameter, MinimumColorValue, MaximumColorValue) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (block_id, *clean.values()))
                 part_id = cursor.lastrowid
             else:
                 cursor = self.connection.execute(
                     "UPDATE BlockPart SET PartName=?, Shape=?, PartColor=?, NumberInBlock=?, "
-                    "PartWidth=?, PartLength=?, SideA=?, SideB=?, SideC=?, Diameter=? "
+                    "PartWidth=?, PartLength=?, SideA=?, SideB=?, SideC=?, Diameter=?, "
+                    "MinimumColorValue=?, MaximumColorValue=? "
                     "WHERE ID=? AND QuiltBlockID=?", (*clean.values(), part_id, block_id))
                 if cursor.rowcount != 1:
                     raise FieldError("MissingRecord", "BlockPart")
@@ -1580,6 +1615,7 @@ class Database:
             else values[name] for name in FABRIC_NAMES
         }
         clean = self._validate_fields(FABRIC_FIELDS, values, "FabricPiece")
+        clean["ColorValue"] = int(clean["ColorValue"]) if clean["ColorValue"] else None
         timestamp = now()
         with self.connection:
             for name in DROPDOWN_FIELDS:
@@ -1887,7 +1923,7 @@ class Database:
             args.append(clean["Status"])
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         order_sql = ", ".join(
-            f"{field}{'' if field in ('ID', 'UsableWidth', 'UsableLength') else ' COLLATE NOCASE'} {direction}"
+            f"{field}{'' if field in ('ID', 'UsableWidth', 'UsableLength', 'ColorValue') else ' COLLATE NOCASE'} {direction}"
             for field, direction in order
         )
         rows = [dict(row) for row in self.connection.execute(

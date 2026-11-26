@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .blocks import COLORS
 from .model import Field, FieldError, display_measurement
+from .quilt_planner import matches_color_value
 from .quilt_report import cutting_list_description
 
 
@@ -40,6 +41,7 @@ class QuiltScreenMixin:
         for label, action in (("Set Block Quantity", self.set_quilt_block),
                               ("Remove Block", self.remove_quilt_block),
                               ("Map Color", self.map_quilt_color), ("Remove Mapping", self.remove_quilt_mapping),
+                              ("Eligible Fabrics", self.show_eligible_fabrics),
                               ("Plan Quilt", self.generate_quilt_plan), ("Print Quilt Plan", self.print_quilt_plan)):
             self.button(actions, label, action)
         self.quilt_summary = ttk.Label(self.quilt_page, text="", wraplength=1100, justify="left")
@@ -173,6 +175,37 @@ class QuiltScreenMixin:
         self.db.remove_quilt_mapping(quilt_id, self.quilt_revision, values["PartColor"], values["InventoryColor"])
         self.after_quilt_change(("PartColor", "InventoryColor"))
 
+    def show_eligible_fabrics(self):
+        from .ui import Form, RecordList
+
+        block_id = self.chosen_quilt_block()
+        parts = self.db.block_parts(block_id)
+        choices = {f"{part['PartName']} (ID {part['ID']}; {part['PartColor']})": part for part in parts}
+        window = self.dialog("Eligible Fabrics", "Eligible Fabrics")
+        window.geometry("1000x500")
+        ttk.Label(window, text="Choose a part. The list shows available pieces matching its color value "
+                  "range in the Fabric working selection. Map the part color to inventory colors on "
+                  "the Quilt screen; size and mappings are also checked when planning.",
+                  wraplength=950, padding=8).pack(anchor="w")
+        form = Form(window, (Field("BlockPartChoice", "choice", choices=tuple(choices)),), columns=1)
+        form.pack(fill="x")
+        listing = RecordList(window, ("ID", "FabricName", "Color", "ColorValue", "UsableWidth", "UsableLength"))
+        listing.pack(fill="both", expand=True)
+
+        def refresh():
+            selected = form.variables["BlockPartChoice"].get()
+            part = choices[selected]
+            rows = [row for row in self.available_inventory() if matches_color_value(part, row)]
+            listing.fill(rows, "value-eligible fabric pieces", self.sort)
+
+        form.widgets["BlockPartChoice"].bind("<<ComboboxSelected>>", self.command(refresh))
+        if choices:
+            form.variables["BlockPartChoice"].set(next(iter(choices)))
+            refresh()
+        else:
+            listing.fill([], "value-eligible fabric pieces", self.sort)
+        self.button(window, "Close", window.destroy)
+
     def generate_quilt_plan(self):
         quilt_id = self.require_quilt()
         if (self.quilt_form.values() != self.quilt_initial
@@ -209,10 +242,11 @@ class QuiltScreenMixin:
                  f"Required parts: {data['part_count']}"]
         for source in data["sources"]:
             fabric = source["source"]
+            value = fabric.get("ColorValue")
             lines.append(f"\nSource ID {fabric['ID']}: {fabric['FabricName']} / {fabric['Color']}; "
                          f"{fmt(fabric['UsableWidth'])} x {fmt(fabric['UsableLength'])} in; "
                          f"revision {fabric['Revision']}; grain {fabric['GrainDirection']}; "
-                         f"print {fabric['PrintDirection']}")
+                         f"print {fabric['PrintDirection']}; color value {value if value is not None else 'unknown'}")
             for cut in source["cuts"]:
                 lines.append(f"  Block {cut['block_name']} (ID {cut['block_id']}), "
                              f"{cut['part_name']} (ID {cut['part_id']}), {cut['shape']} / {cut['color']}: "
@@ -223,11 +257,13 @@ class QuiltScreenMixin:
                              f"{'mirrored' if cut['mirrored'] else 'not mirrored'}, "
                              f"assembly rotation {cut['block_rotation']} degrees")
         if data["missing"]:
-            lines.append("\nMissing parts (no mapped color or fitting fabric found):")
+            lines.append("\nMissing parts (no mapped, value-eligible and fitting fabric found):")
             for item in data["missing"]:
+                minimum, maximum = item.get("MinimumColorValue"), item.get("MaximumColorValue")
+                value_range = f"; color value {minimum}-{maximum}" if minimum is not None else ""
                 lines.append(f"  {item['block_name']} / {item['part_name']} / {item['color']}: "
                              f"{item['count']} of {fmt(item['cut_width'])} x {fmt(item['cut_length'])} in "
-                             f"({'mirrored' if item['mirrored'] else 'not mirrored'})")
+                             f"({'mirrored' if item['mirrored'] else 'not mirrored'}{value_range})")
         else:
             lines.append("\nAll required parts allocated in this snapshot.")
         return "\n".join(lines)
