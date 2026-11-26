@@ -19,7 +19,7 @@ python QuiltingTools.py --database "/path/to/QuiltingInventory.db"
 
 The default database is `QuiltingTools/QuiltingInventory.db` in your home directory.
 Fabric and Setup show the actual database path. A new database is initialized
-automatically. Schema version 16 is the current development baseline. Upgrade
+automatically. Schema version 17 is the current development baseline. Upgrade
 code for older versions remains in place for now; the application is not yet
 deployed. Upgrades add optional fabric color values and block-part ranges and
 later database features; declining leaves the database unchanged. Close all
@@ -248,6 +248,17 @@ To compare saved layouts side by side, highlight multiple block rows (Ctrl-click
 or Shift-click) and choose **Sketch**. Scroll to see additional blocks; close the
 comparison and select one block to edit its placements.
 
+**Fabric Rules** controls how each block copy uses fabric. **Legacy** preserves
+the original unrestricted packing behavior. **Distinct** tries to use a different
+fabric name for every position; **Grouped** permits reuse between positions.
+Legacy ignores saved groups without deleting them.
+In either new mode, select positions and assign the same group name to require
+them to use the same fabric name, including across different part definitions
+or mirrored instances. Leave the group blank for an independent position. Group
+names and fabric names are compared without regard to case. Apply each group
+before selecting another position, then save the rules. Rules are editable on
+drafts, copied by New Version, and immutable after approval.
+
 **Approve** checks all instances, overlaps, gaps and overflow against the block
 rectangle before making the version immutable. The geometry check allows an area
 tolerance for triangle-side rounding equivalent to one-half microinch of unscaled
@@ -271,6 +282,9 @@ its color and optional value range in Parts. These are editable defaults and
 existing saved blocks are unchanged. The generated parts and placements can be
 edited before approval; colors are visual defaults. Wedding Ring is not included
 because its curved arc pieces are not represented by the current geometry model.
+New log cabin templates default to Distinct; the other templates default to
+Grouped, with positions sharing a sketch color grouped together. These defaults
+can be edited on the draft; existing saved blocks remain Legacy.
 
 ### Quilt composition and cutting plans
 
@@ -294,8 +308,23 @@ also shows previously assigned pieces outside that selection. Planning checks
 the working selection, availability, color mapping, value range, and fit;
 assignments do not reserve fabric. **Plan Quilt**
 aggregates all selected blocks' parts and packs their cut-outline bounding
-rectangles into Available fabric in the Fabric Inventory working list. It prefers an already used source with space,
-then a fitting leftover region and smaller source area. Parts can rotate 90 degrees;
+rectangles into Available fabric in the Fabric Inventory working list. Legacy blocks
+prefer an already used source with space, then a fitting leftover region and smaller
+source area. For Distinct and Grouped blocks, the planner works from larger cut
+bounding areas to smaller ones and chooses the smallest qualifying source area.
+Pieces with the same fabric name count as the same fabric, even if they are
+separate inventory rectangles. A sharing group must be satisfiable by that name
+for every position, including each part's assignments, mapped color and value range.
+Each group is allocated together when its largest position is encountered.
+If Distinct runs out of unused qualifying names but reuse can complete the current
+position or group, choose whether to clear that block copy's used-name markers and
+continue with the existing choices, or cancel. If no qualifying fabric can fit,
+planning cancels with a shortage message. In either case cancellation saves no
+partial plan for the new rules. Retry choices stay in memory, do not reserve
+inventory, and are discarded on cancellation or exit. The app does not hold a
+database write transaction while prompting; it checks the inputs again before
+saving and asks for replanning if they changed. Legacy blocks continue to report
+shortages in saved partial plans. Parts can rotate 90 degrees;
 the plan records source orientation, assembly rotation, mirrored instances, grain
 and print descriptions for operator review. Many parts can share one source.
 

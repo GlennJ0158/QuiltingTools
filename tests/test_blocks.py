@@ -96,6 +96,42 @@ class BlockTests(unittest.TestCase):
                         current, self.db.block_parts(block_id), self.db.block_placements(block_id)), [])
                     self.db.approve_block(block_id, current["Revision"])
 
+    def test_template_fabric_rules_copy_and_individual_groups(self):
+        for name in BLOCK_TEMPLATES:
+            block_id = self.db.create_block_template(name, block())
+            rule = self.db.block_fabric_rule(block_id)
+            self.assertEqual(rule["mode"], "Distinct" if name.startswith("Log Cabin") else "Grouped")
+            if not name.startswith("Log Cabin"):
+                self.assertEqual(len(rule["groups"]), len(self.db.block_placements(block_id)))
+                copy_id = self.db.copy_block(block_id)
+                self.assertEqual(sorted(rule["groups"].values()),
+                                 sorted(self.db.block_fabric_rule(copy_id)["groups"].values()))
+        block_id = self.db.add_block(block())
+        self.db.save_block_part(block_id, 1, part())
+        placements = self.db.block_placements(block_id)
+        self.db.save_block_fabric_rule(block_id, 2, "Distinct", {placements[0]["ID"]: "Same"})
+        self.assertEqual(self.db.block_fabric_rule(block_id),
+                         {"mode": "Distinct", "groups": {placements[0]["ID"]: "Same"}})
+        with self.assertRaises(FieldError):
+            self.db.save_block_fabric_rule(block_id, 2, "Grouped", {})
+        with self.assertRaises(FieldError):
+            self.db.save_block_fabric_rule(block_id, 3, "Grouped", {999999: "Same"})
+        self.db.save_block_fabric_rule(block_id, 3, "Legacy", {placements[0]["ID"]: "Same"})
+        self.assertEqual(self.db.block_fabric_rule(block_id),
+                         {"mode": "Legacy", "groups": {placements[0]["ID"]: "Same"}})
+
+    def test_v16_upgrade_preserves_blocks_and_plans_with_legacy_rule(self):
+        block_id = self.db.add_block(block())
+        self.db.save_block_part(block_id, 1, part())
+        with self.db.connection:
+            self.db.connection.execute("DROP TABLE PlacementFabricGroup")
+            self.db.connection.execute("DROP TABLE BlockFabricRule")
+            self.db.connection.execute("PRAGMA user_version=16")
+        self.db.close()
+        self.db = Database(self.path, upgrade=True)
+        self.assertEqual(self.db.block_fabric_rule(block_id), {"mode": "Legacy", "groups": {}})
+        self.assertEqual(len(self.db.block_parts(block_id)), 1)
+
     def test_log_cabin_spiral_light_dark_ranges_and_square_original(self):
         spiral_id = self.db.create_block_template(
             "Log Cabin (Spiral)", block(FinishedWidth="12.000001", FinishedLength="10"))

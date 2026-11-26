@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .model import Field, FieldError, display_fabric_name, display_fractional_measurement
-from .quilt_planner import matches_color_value
+from .quilt_planner import PlanningCancelled, matches_color_value
 from .quilt_report import cutting_list_description
 
 
@@ -322,8 +322,22 @@ class QuiltScreenMixin:
                 "Unmapped colors will produce shortages. Continue planning?",
                 parent=self.root):
             return
-        plan_id = self.db.create_quilt_plan(
-            quilt_id, self.quilt_revision, [row["ID"] for row in self.available_inventory()])
+        def reuse_decision(item):
+            return messagebox.askyesno(
+                "Reuse fabric?",
+                f"No unused qualifying fabric can complete {item['part_name']} in "
+                f"{item['block_name']}, block copy {item['block_number']}.\n\n"
+                "Reuse fabric already chosen in this block? Choose No to cancel and add or change fabric.",
+                parent=self.root)
+
+        try:
+            plan_id = self.db.create_quilt_plan(
+                quilt_id, self.quilt_revision, [row["ID"] for row in self.available_inventory()],
+                reuse_decision=reuse_decision)
+        except PlanningCancelled:
+            messagebox.showinfo("Planning canceled", "No plan was saved. Add or change fabric and try again.",
+                                parent=self.root)
+            return
         self.quilt_initial = self.quilt_form.values()
         self.load_quilt(quilt_id)
         self.load_quilt_plan(plan_id)

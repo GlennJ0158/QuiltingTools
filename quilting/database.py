@@ -29,7 +29,7 @@ from .model import (
 )
 
 APPLICATION_ID = 0x5155494C
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class MissingHelp(FieldError):
@@ -80,6 +80,14 @@ CREATE TABLE BlockPartPlacement (
     Rotation INTEGER NOT NULL CHECK(Rotation BETWEEN 0 AND 359),
     Mirrored INTEGER NOT NULL CHECK(Mirrored IN (0, 1)),
     UNIQUE(BlockPartID, Instance)
+);
+CREATE TABLE IF NOT EXISTS BlockFabricRule (
+    QuiltBlockID INTEGER PRIMARY KEY REFERENCES QuiltBlock(ID) ON DELETE CASCADE,
+    Mode TEXT NOT NULL CHECK(Mode IN ('Distinct', 'Grouped'))
+);
+CREATE TABLE IF NOT EXISTS PlacementFabricGroup (
+    PlacementID INTEGER PRIMARY KEY REFERENCES BlockPartPlacement(ID) ON DELETE CASCADE,
+    GroupName TEXT NOT NULL CHECK(length(trim(GroupName)) BETWEEN 1 AND 120)
 );
 CREATE TABLE BlockSet (
     ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,6 +330,8 @@ TABLE_COLUMNS = {
                   "PartWidth", "PartLength", "SideA", "SideB", "SideC", "Diameter",
                   "MinimumColorValue", "MaximumColorValue"),
     "BlockPartPlacement": ("ID", "BlockPartID", "Instance", "X", "Y", "Rotation", "Mirrored"),
+    "BlockFabricRule": ("QuiltBlockID", "Mode"),
+    "PlacementFabricGroup": ("PlacementID", "GroupName"),
     "BlockSet": ("ID", "SetName", "DateCreated"),
     "BlockSetMember": ("SelectionSetID", "QuiltBlockID"),
     "Quilt": ("ID", "QuiltName", "Revision", "DateCreated", "DateModified"),
@@ -414,6 +424,8 @@ class Database:
                                    if allow_legacy else (SCHEMA_VERSION,))):
             raise FieldError("DatabaseFormat", "Database", detail="Unsupported database or schema version.")
         for table, expected in TABLE_COLUMNS.items():
+            if version < 17 and table in ("BlockFabricRule", "PlacementFabricGroup"):
+                continue
             if version < 16 and table == "QuiltPartFabric":
                 continue
             if version < 9 and table in ("QuiltBlock", "BlockPart", "BlockPartPlacement", "BlockSet",
@@ -522,7 +534,7 @@ class Database:
                         "CHECK((MaximumColorValue IS NULL AND MinimumColorValue IS NULL) OR "
                         "(typeof(MaximumColorValue) = 'integer' AND MaximumColorValue BETWEEN 1 AND 10 "
                         "AND MinimumColorValue IS NOT NULL AND MinimumColorValue <= MaximumColorValue))")
-            if version >= 9:
+            if 9 <= version < 16:
                 self.connection.execute("""
                     CREATE TABLE QuiltPartFabric (
                         QuiltID INTEGER NOT NULL,
@@ -532,6 +544,19 @@ class Database:
                         PRIMARY KEY (QuiltID, BlockPartID, FabricPieceID),
                         FOREIGN KEY (QuiltID, QuiltBlockID)
                             REFERENCES QuiltBlockUse(QuiltID, QuiltBlockID) ON DELETE CASCADE
+                    )
+                """)
+            if version >= 9:
+                self.connection.execute("""
+                    CREATE TABLE IF NOT EXISTS BlockFabricRule (
+                        QuiltBlockID INTEGER PRIMARY KEY REFERENCES QuiltBlock(ID) ON DELETE CASCADE,
+                        Mode TEXT NOT NULL CHECK(Mode IN ('Distinct', 'Grouped'))
+                    )
+                """)
+                self.connection.execute("""
+                    CREATE TABLE IF NOT EXISTS PlacementFabricGroup (
+                        PlacementID INTEGER PRIMARY KEY REFERENCES BlockPartPlacement(ID) ON DELETE CASCADE,
+                        GroupName TEXT NOT NULL CHECK(length(trim(GroupName)) BETWEEN 1 AND 120)
                     )
                 """)
             self.connection.execute(
@@ -1327,6 +1352,8 @@ class Database:
         if error.key == "Conflict" and error.field == "QuiltBlock" and "reason" in error.details:
             message, resolution = BLOCK_CONFLICT_MESSAGES[error.details["reason"]]
             return f"{caption(error.field)}: {message}\n\n{resolution}\n\nError ID: {row['ErrorTextID']}"
+        if error.key == "Database" and error.field == "Quilt" and error.details.get("reason") == "planning":
+            return f"Quilt: {error.details['detail']}\n\nError ID: {row['ErrorTextID']}"
         if (error.key == "Choice" and error.field == "MinimumColorValue"
                 and error.details.get("reason") == "range_order"):
             return ("Minimum Color Value: The minimum cannot exceed the maximum.\n\n"
@@ -1379,6 +1406,38 @@ class Database:
         return [dict(row) for row in self.connection.execute(
             "SELECT p.* FROM BlockPartPlacement p JOIN BlockPart b ON b.ID = p.BlockPartID "
             "WHERE b.QuiltBlockID = ? ORDER BY b.ID, p.Instance", (block_id,))]
+
+    def block_fabric_rule(self, block_id):
+        self.get_block(block_id)
+        row = self.connection.execute(
+            "SELECT Mode FROM BlockFabricRule WHERE QuiltBlockID=?", (block_id,)).fetchone()
+        groups = {row["PlacementID"]: row["GroupName"] for row in self.connection.execute(
+            "SELECT g.PlacementID, g.GroupName FROM PlacementFabricGroup g "
+            "JOIN BlockPartPlacement p ON p.ID=g.PlacementID "
+            "JOIN BlockPart b ON b.ID=p.BlockPartID WHERE b.QuiltBlockID=?", (block_id,))}
+        return {"mode": row["Mode"] if row else "Legacy", "groups": groups}
+
+    def save_block_fabric_rule(self, block_id, revision, mode, groups):
+        if mode not in ("Legacy", "Distinct", "Grouped"):
+            raise FieldError("Choice", "FabricRule")
+        if not isinstance(groups, dict):
+            raise FieldError("Choice", "FabricGroup")
+        with self._write_transaction():
+            self._block_draft(block_id, revision)
+            placements = {p["ID"] for p in self.block_placements(block_id)}
+            if any(type(key) is not int or key not in placements or not isinstance(value, str)
+                   or not value.strip() or len(value.strip()) > 120 for key, value in groups.items()):
+                raise FieldError("Choice", "FabricGroup")
+            self.connection.execute("DELETE FROM BlockFabricRule WHERE QuiltBlockID=?", (block_id,))
+            self.connection.execute(
+                "DELETE FROM PlacementFabricGroup WHERE PlacementID IN "
+                "(SELECT p.ID FROM BlockPartPlacement p JOIN BlockPart b ON b.ID=p.BlockPartID "
+                "WHERE b.QuiltBlockID=?)", (block_id,))
+            if mode != "Legacy":
+                self.connection.execute("INSERT INTO BlockFabricRule VALUES (?, ?)", (block_id, mode))
+            self.connection.executemany("INSERT INTO PlacementFabricGroup VALUES (?, ?)",
+                                        ((key, value.strip()) for key, value in groups.items()))
+            self._touch_block(block_id)
 
     def _block_draft(self, block_id, revision):
         row = self.get_block(block_id)
@@ -1444,6 +1503,13 @@ class Database:
                     "(BlockPartID, Instance, X, Y, Rotation, Mirrored) VALUES (?, ?, ?, ?, ?, ?)",
                     ((part_id, instance, x, y, rotation, int(mirrored))
                      for instance, (x, y, rotation, mirrored) in enumerate(spec["placements"], 1)))
+            mode = "Distinct" if name.startswith("Log Cabin") else "Grouped"
+            self.connection.execute("INSERT INTO BlockFabricRule VALUES (?, ?)", (block_id, mode))
+            if mode == "Grouped":
+                self.connection.execute(
+                    "INSERT INTO PlacementFabricGroup SELECT p.ID, b.PartColor "
+                    "FROM BlockPartPlacement p JOIN BlockPart b ON b.ID=p.BlockPartID "
+                    "WHERE b.QuiltBlockID=?", (block_id,))
             issues = validate_layout(
                 self.get_block(block_id), self.block_parts(block_id), self.block_placements(block_id),
             )
@@ -1478,6 +1544,9 @@ class Database:
                     "BlockName", "Description", "FinishedWidth", "FinishedLength", "Scale", "SeamAllowance")),
                  timestamp, timestamp))
             new_id = cursor.lastrowid
+            self.connection.execute(
+                "INSERT INTO BlockFabricRule SELECT ?, Mode FROM BlockFabricRule WHERE QuiltBlockID=?",
+                (new_id, block_id))
             for part in self.block_parts(block_id):
                 result = self.connection.execute(
                     "INSERT INTO BlockPart (QuiltBlockID, PartName, Shape, PartColor, NumberInBlock, "
@@ -1490,6 +1559,11 @@ class Database:
                     "INSERT INTO BlockPartPlacement (BlockPartID, Instance, X, Y, Rotation, Mirrored) "
                     "SELECT ?, Instance, X, Y, Rotation, Mirrored FROM BlockPartPlacement WHERE BlockPartID = ?",
                     (result.lastrowid, part["ID"]))
+                self.connection.execute(
+                    "INSERT INTO PlacementFabricGroup SELECT new.ID, g.GroupName "
+                    "FROM BlockPartPlacement old JOIN PlacementFabricGroup g ON g.PlacementID=old.ID "
+                    "JOIN BlockPartPlacement new ON new.BlockPartID=? AND new.Instance=old.Instance "
+                    "WHERE old.BlockPartID=?", (result.lastrowid, part["ID"]))
         return new_id
 
     def save_block_part(self, block_id, revision, values, part_id=None):
@@ -1691,27 +1765,35 @@ class Database:
             raise FieldError("DatabaseFormat", "QuiltPlan", detail=str(error)) from error
         return result
 
-    def create_quilt_plan(self, quilt_id, revision, selected_ids=None):
+    def _quilt_plan_inputs(self, quilt_id, revision, selected_ids):
+        self._quilt_revision(quilt_id, revision)
+        records = self.quilt_uses(quilt_id)
+        if not records:
+            raise FieldError("Required", "QuiltBlock")
+        uses = []
+        for record in records:
+            block = self.get_block(record["ID"])
+            if block["Status"] != "Approved":
+                raise FieldError("Choice", "QuiltBlock")
+            uses.append({"block": block, "parts": self.block_parts(block["ID"]),
+                         "placements": self.block_placements(block["ID"]),
+                         "fabric_rule": self.block_fabric_rule(block["ID"]),
+                         "quantity": record["Quantity"]})
+        mappings = {}
+        for row in self.quilt_mappings(quilt_id):
+            mappings.setdefault(row["PartColor"], []).append(row["InventoryColor"])
+        return (self.get_quilt(quilt_id), uses, mappings, self.pieces(selected_ids=selected_ids),
+                self.quilt_part_fabrics(quilt_id))
+
+    def create_quilt_plan(self, quilt_id, revision, selected_ids=None, reuse_decision=None):
+        inputs = self._quilt_plan_inputs(quilt_id, revision, selected_ids)
+        quilt, uses, mappings, sources, assignments = inputs
+        draft = plan_quilt(uses, mappings, sources, assignments, reuse_decision)
+        draft.update(quilt=quilt, uses=uses, mappings=mappings, assignments=assignments)
         with self._write_transaction():
-            self._quilt_revision(quilt_id, revision)
-            records = self.quilt_uses(quilt_id)
-            if not records:
-                raise FieldError("Required", "QuiltBlock")
-            uses = []
-            for record in records:
-                block = self.get_block(record["ID"])
-                if block["Status"] != "Approved":
-                    raise FieldError("Choice", "QuiltBlock")
-                uses.append({"block": block, "parts": self.block_parts(block["ID"]),
-                             "placements": self.block_placements(block["ID"]),
-                             "quantity": record["Quantity"]})
-            mappings = {}
-            for row in self.quilt_mappings(quilt_id):
-                mappings.setdefault(row["PartColor"], []).append(row["InventoryColor"])
-            assignments = self.quilt_part_fabrics(quilt_id)
-            draft = plan_quilt(uses, mappings, self.pieces(selected_ids=selected_ids), assignments)
-            draft.update(quilt=self.get_quilt(quilt_id), uses=uses, mappings=mappings,
-                         assignments=assignments)
+            if self._quilt_plan_inputs(quilt_id, revision, selected_ids) != inputs:
+                raise FieldError("Database", "Quilt", reason="planning", detail=(
+                    "The quilt or selected inventory changed during planning. No plan was saved; try again."))
             return self.connection.execute(
                 "INSERT INTO QuiltPlan (QuiltID, QuiltRevision, PlanData, DateCreated) VALUES (?, ?, ?, ?)",
                 (quilt_id, revision, json.dumps(draft), now())).lastrowid

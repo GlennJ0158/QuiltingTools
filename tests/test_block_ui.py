@@ -103,6 +103,33 @@ class BlockUITests(unittest.TestCase):
         self.assertEqual(self.app.block_list.tree.selection(), (str(self.app.block_id),))
         self.errors.assert_not_called()
 
+    def test_edit_fabric_rules_per_placement(self):
+        block_id = self.db.add_block(block())
+        self.db.save_block_part(block_id, 1, part())
+        placements = self.db.block_placements(block_id)
+        self.app.refresh_blocks(block_id)
+        self.click(self.app.block_page, "Fabric Rules")
+        window = self.app.dialogs[-1]
+        for widget in descendants(window):
+            if isinstance(widget, (ttk.Button, ttk.Entry, ttk.Combobox)):
+                self.assertTrue(all(self.db.help_pair(*widget.help_key())), str(widget))
+        chooser = next(widget for widget in descendants(window) if isinstance(widget, ttk.Combobox))
+        chooser.set("Distinct")
+        tree = next(widget for widget in descendants(window) if isinstance(widget, ttk.Treeview))
+        entry = next(widget for widget in descendants(window)
+                     if isinstance(widget, ttk.Entry) and not isinstance(widget, ttk.Combobox))
+        for placement in placements:
+            tree.selection_set(str(placement["ID"]))
+            self.root.update()
+            entry.delete(0, "end")
+            entry.insert(0, "Same")
+            self.click(window, "Apply Group")
+        self.click(window, "Save Selection and Return")
+        rule = self.db.block_fabric_rule(block_id)
+        self.assertEqual(rule["mode"], "Distinct")
+        self.assertEqual(rule["groups"], {p["ID"]: "Same" for p in placements})
+        self.errors.assert_not_called()
+
     def test_spiral_parts_allow_user_to_edit_center_value_range(self):
         block_id = self.db.create_block_template("Log Cabin (Spiral)", block())
         self.app.refresh_blocks(block_id)
@@ -472,3 +499,27 @@ class BlockUITests(unittest.TestCase):
         data = self.db.get_quilt_plan(self.app.quilt_plan_id)["PlanData"]
         self.assertEqual(data["sources"], [])
         self.assertEqual(data["missing"][0]["count"], 4)
+
+    def test_quilt_reuse_prompt_cancel_and_continue(self):
+        block_id = self.db.add_block(block())
+        self.db.save_block_part(block_id, 1, part())
+        placements = self.db.block_placements(block_id)
+        self.db.save_block_placement(block_id, 2, placements[1]["ID"], 5_000_000, 0, 0, False)
+        self.db.save_block_fabric_rule(block_id, 3, "Distinct", {})
+        self.db.approve_block(block_id, 4)
+        self.db.save_piece(fabric(FabricName="Only", Color="Red", UsableWidth="12", UsableLength="22"))
+        quilt = self.db.add_quilt("Test")
+        self.db.set_quilt_use(quilt, 1, block_id, 1)
+        self.db.add_quilt_mapping(quilt, 2, "Red", "Red")
+        self.app.show_screen("Quilt")
+        self.app.load_quilt(quilt)
+        with patch("quilting.quilt_ui.messagebox.askyesno", side_effect=[True, False]) as prompt, \
+                patch("quilting.quilt_ui.messagebox.showinfo") as info:
+            self.app.generate_quilt_plan()
+            self.assertEqual(prompt.call_count, 2)
+            info.assert_called_once()
+            self.assertEqual(self.db.quilt_plans(quilt), [])
+        with patch("quilting.quilt_ui.messagebox.askyesno", side_effect=[True, True]):
+            self.app.generate_quilt_plan()
+        self.assertEqual(len(self.db.quilt_plans(quilt)), 1)
+        self.errors.assert_not_called()

@@ -62,7 +62,8 @@ class BlockScreenMixin:
                               ("Create from Template", self.create_block_template),
                               ("Delete", self.delete_block), ("Clear", self.clear_block_entry),
                               ("New Version", self.copy_block), ("Parts", self.open_parts),
-                              ("Sketch", self.open_block_sketch), ("Approve", self.approve_block)):
+                              ("Sketch", self.open_block_sketch), ("Fabric Rules", self.open_fabric_rules),
+                              ("Approve", self.approve_block)):
             self.button(actions, label, action)
         tools = ttk.Frame(entry, padding=4, style="Entry.TFrame")
         tools.pack(fill="x")
@@ -386,6 +387,108 @@ class BlockScreenMixin:
             self.button(controls, label, action)
         window.protocol("WM_DELETE_WINDOW", self.command(close))
         window.bind("<Escape>", lambda _: self.command(close)())
+        refresh()
+
+    def open_fabric_rules(self):
+        block_id = self.require_block()
+        if not self.allow_block_discard():
+            return
+        self.block_form.assign(self.block_initial)
+        original = self.db.block_fabric_rule(block_id)
+        groups = dict(original["groups"])
+        parts = {p["ID"]: p for p in self.db.block_parts(block_id)}
+        placements = self.db.block_placements(block_id)
+        window = self.dialog("Fabric Rules", "Fabric Rules")
+        window.geometry("760x520")
+        ttk.Label(window, text="Distinct uses a different fabric name for each position or group until "
+                  "reuse is approved. Grouped only requires positions with the same group name to match. "
+                  "Legacy retains the previous planner and ignores groups. "
+                  "Blank group names leave positions independent.",
+                  wraplength=700, padding=8).pack(anchor="w")
+        mode = tk.StringVar(value=original["mode"])
+        row = ttk.Frame(window, padding=6)
+        row.pack(fill="x")
+        ttk.Label(row, text="Rule").pack(side="left")
+        chooser = ttk.Combobox(row, textvariable=mode, state="readonly",
+                               values=("Legacy", "Distinct", "Grouped"), width=15)
+        chooser.pack(side="left", padx=8)
+        self.attach_help(chooser, "FabricRule")
+        tree = ttk.Treeview(window, columns=("part", "instance", "group"), show="headings", selectmode="browse")
+        for column, title in (("part", "Part"), ("instance", "Instance"), ("group", "Fabric group")):
+            tree.heading(column, text=title)
+        tree.pack(fill="both", expand=True, padx=8)
+        group = tk.StringVar()
+        edit = ttk.Frame(window, padding=6)
+        edit.pack(fill="x")
+        ttk.Label(edit, text="Group name").pack(side="left")
+        entry = ttk.Entry(edit, textvariable=group)
+        entry.pack(side="left", padx=8)
+        self.attach_help(entry, "FabricGroup")
+        previous = ()
+
+        def refresh():
+            for p in placements:
+                values = (parts[p["BlockPartID"]]["PartName"], p["Instance"], groups.get(p["ID"], ""))
+                if tree.exists(str(p["ID"])):
+                    tree.item(str(p["ID"]), values=values)
+                else:
+                    tree.insert("", "end", iid=str(p["ID"]), values=values)
+
+        def choose(_event):
+            nonlocal previous
+            selection = tree.selection()
+            if selection == previous:
+                return
+            if (previous and group.get().strip() != groups.get(int(previous[0]), "")
+                    and not messagebox.askyesno("Unsaved Changes", "Discard the unapplied group name?",
+                                               parent=window)):
+                tree.selection_set(previous)
+                return
+            group.set(groups.get(int(selection[0]), "") if selection else "")
+            previous = selection
+
+        def apply_group():
+            selection = tree.selection()
+            if len(selection) != 1:
+                raise FieldError("OneRecord", "BlockPartPlacement")
+            value = group.get().strip()
+            if len(value) > 120:
+                raise FieldError("TooLong", "FabricGroup", limit=120)
+            if value:
+                groups[int(selection[0])] = value
+            else:
+                groups.pop(int(selection[0]), None)
+            group.set(value)
+            refresh()
+
+        def dirty():
+            selection = tree.selection()
+            pending = bool(selection) and group.get().strip() != groups.get(int(selection[0]), "")
+            return mode.get() != original["mode"] or groups != original["groups"] or pending
+
+        self.dialog_dirty[window] = dirty
+
+        def cancel():
+            if not dirty() or messagebox.askyesno("Unsaved Changes", "Discard fabric rule changes?",
+                                                  parent=window):
+                window.destroy()
+
+        def save():
+            selection = tree.selection()
+            if selection and group.get().strip() != groups.get(int(selection[0]), ""):
+                apply_group()
+            self.db.save_block_fabric_rule(block_id, self.block_revision, mode.get(), groups)
+            window.destroy()
+            self.refresh_blocks(block_id)
+
+        tree.bind("<<TreeviewSelect>>", choose)
+        self.button(edit, "Apply Group", apply_group)
+        controls = ttk.Frame(window, padding=6)
+        controls.pack(fill="x")
+        self.button(controls, "Save Selection and Return", save)
+        self.button(controls, "Cancel", cancel)
+        window.protocol("WM_DELETE_WINDOW", self.command(cancel))
+        window.bind("<Escape>", lambda _: self.command(cancel)())
         refresh()
 
     def open_block_sketch(self):
